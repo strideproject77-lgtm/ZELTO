@@ -1,0 +1,33 @@
+name: Zelto iOS App Build
+on:
+  push:
+    branches: [main]
+    paths: ["Package.swift", "Sources/**", "ios/**", ".github/workflows/ios-app-build.yml"]
+  pull_request:
+    paths: ["Package.swift", "Sources/**", "ios/**", ".github/workflows/ios-app-build.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zelto-ios-app-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build-ios-app:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: |
+          cd ios
+          xcodegen generate
+      - name: Build iOS Simulator app
+        run: |
+          xcodebuild \
+            -project ios/Zelto.xcodeproj \
+            -scheme Zelto \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build
