@@ -146,12 +146,15 @@ private final class HTTPFileTransfer: NSObject, URLSessionDataDelegate, @uncheck
                 terminalError = HTTPDownloadError.invalidContentRange
                 completionHandler(.cancel); return
             }
-            if let expectedValidator,
-               let responseValidator = http.value(forHTTPHeaderField: "ETag")
-                    ?? http.value(forHTTPHeaderField: "Last-Modified"),
-               responseValidator != expectedValidator {
-                terminalError = HTTPDownloadError.validatorMismatch
-                completionHandler(.cancel); return
+            if let expectedValidator {
+                let responseETag = http.value(forHTTPHeaderField: "ETag")
+                let responseModified = http.value(forHTTPHeaderField: "Last-Modified")
+                if (responseETag != nil || responseModified != nil)
+                    && responseETag != expectedValidator
+                    && responseModified != expectedValidator {
+                    terminalError = HTTPDownloadError.validatorMismatch
+                    completionHandler(.cancel); return
+                }
             }
             expectedBytes = total
             do {
