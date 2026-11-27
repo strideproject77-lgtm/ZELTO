@@ -38,12 +38,16 @@ struct DownloadListView: View {
                         .padding(.vertical, 4)
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             if task.status == .downloading {
-                                Button("Pause", systemImage: "pause.fill") {
+                                Button {
                                     Task { await pauseDownload(task.id) }
+                                } label: {
+                                    Label("Pause", systemImage: "pause.fill")
                                 }.tint(.orange)
                             } else if task.status == .paused || task.status == .queued {
-                                Button("Resume", systemImage: "play.fill") {
+                                Button {
                                     Task { await resumeDownload(task.id) }
+                                } label: {
+                                    Label("Resume", systemImage: "play.fill")
                                 }.tint(.green)
                             }
                         }
