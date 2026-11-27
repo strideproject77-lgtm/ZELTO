@@ -4,9 +4,6 @@ on:
   push:
     branches: [main]
     paths:
-      - ".github/workflows/ipa-builder.yml"
-      - "codemagic.yaml"
-      - "scripts/**"
       - "**/*.xcodeproj/**"
       - "**/*.xcworkspace/**"
       - "**/*.swift"
