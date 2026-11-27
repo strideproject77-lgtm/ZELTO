@@ -1,0 +1,51 @@
+workflows:
+  zelto-ipa:
+    name: Zelto iOS IPA Builder
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+    environment:
+      groups:
+        - zelto-github-logs
+      xcode: "26.2"
+      vars:
+        ZELTO_SCHEME: Zelto
+        ZELTO_CODEMAGIC_LOG_DIR: /tmp/zelto-codemagic-logs
+    when:
+      changeset:
+        includes:
+          - codemagic.yaml
+          - .github/workflows/ipa-builder.yml
+          - scripts/**
+          - "**/*.xcodeproj/**"
+          - "**/*.xcworkspace/**"
+          - "**/*.swift"
+          - "**/*.m"
+          - "**/*.mm"
+          - "**/*.h"
+          - "**/*.plist"
+          - "**/*.entitlements"
+          - Package.swift
+          - Podfile
+          - Gemfile
+    scripts:
+      - name: Restore submodules and capture runner details
+        script: |
+          set -euo pipefail
+          mkdir -p "$ZELTO_CODEMAGIC_LOG_DIR"
+          {
+            echo "Codemagic runner setup"
+            echo "Commit: ${CM_COMMIT:-unknown}"
+            echo "Build ID: ${CM_BUILD_ID:-unknown}"
+            git submodule sync --recursive
+            if [ -f .gitmodules ]; then git -c http.version=HTTP/1.1 submodule update --init --recursive; fi
+            xcodebuild -version
+            xcodebuild -showsdks
+          } 2>&1 | tee "$ZELTO_CODEMAGIC_LOG_DIR/runner-setup.log"
+      - name: Shared IPA build and log publishing
+        script: |
+          set -euo pipefail
+          bash scripts/run_codemagic_build.sh
+    artifacts:
+      - Zelto.ipa
+      - /tmp/zelto-codemagic-logs/*.log
+      - /tmp/zelto-codemagic-logs/metadata.json
