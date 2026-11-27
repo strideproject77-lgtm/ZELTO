@@ -16,9 +16,9 @@ def api(method,path,payload=None):
   raise RuntimeError("GitHub API %s %s HTTP %s: %s"%(method,path,e.code,e.read().decode("utf-8","replace")[:800]))
 def clean(raw):
  s=raw.decode("utf-8","replace")
- s=re.sub(r"(?i)(authorization\\s*[:=]\\s*bearer\\s+)[^\\s]+",r"\\1[REDACTED]",s)
- s=re.sub(r"(?i)\\b(gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\\b","[REDACTED_TOKEN]",s)
- s=re.sub(r"(?i)(\\b(?:token|password|passwd|client_secret|api[_-]?key)\\b\\s*[:=]\\s*)[^\\s,;]+",r"\\1[REDACTED]",s)
+ s=re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s]+",r"\1[REDACTED]",s)
+ s=re.sub(r"(?i)\b(gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b","[REDACTED_TOKEN]",s)
+ s=re.sub(r"(?i)(\b(?:token|password|passwd|client_secret|api[_-]?key)\b\s*[:=]\s*)[^\s,;]+",r"\1[REDACTED]",s)
  s=re.sub(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----","[REDACTED_PRIVATE_KEY]",s,flags=re.S)
  return s.encode()
 D=Path(os.environ.get("ZELTO_CODEMAGIC_LOG_DIR","/tmp/zelto-codemagic-logs"))
@@ -30,7 +30,10 @@ for name,path in sources.items():
  files.extend(split_log(name,raw))
 status=int(os.environ.get("ZELTO_CODEMAGIC_BUILD_EXIT_CODE","1"))
 meta={"provider":"Codemagic","repository":REPO,"branch":os.environ.get("CM_BRANCH","unknown"),"commit":os.environ.get("CM_COMMIT","unknown"),"build_id":os.environ.get("CM_BUILD_ID","unknown"),"build_number":os.environ.get("CM_BUILD_NUMBER","unknown"),"xcode":os.environ.get("ZELTO_XCODE_VERSION","unknown"),"exit_code":status,"result":"success" if status==0 else "failed","uploaded_at_utc":datetime.datetime.now(datetime.timezone.utc).isoformat(),"logs":stats,"max_part_bytes":4*1024*1024,"parts":[p for p,_ in files]}
-files.append(("latest/metadata.json",(json.dumps(meta,indent=2)+"\n").encode()))
+meta_bytes=(json.dumps(meta,indent=2)+"\n").encode()
+(D).mkdir(parents=True,exist_ok=True)
+(D/"metadata.json").write_bytes(meta_bytes)
+files.append(("latest/metadata.json",meta_bytes))
 tree=[]
 for path,data in files:
  b=api("POST","git/blobs",{"content":base64.b64encode(data).decode(),"encoding":"base64"})
