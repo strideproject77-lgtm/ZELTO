@@ -43,7 +43,7 @@ struct DownloadListView: View {
                                 } label: {
                                     Label("Pause", systemImage: "pause.fill")
                                 }.tint(.orange)
-                            } else if task.status == .paused || task.status == .queued {
+                            } else if task.status == .paused || task.status == .queued || task.status == .failed {
                                 Button {
                                     Task { await resumeDownload(task.id) }
                                 } label: {
@@ -68,7 +68,12 @@ struct DownloadListView: View {
                     .accessibilityLabel("Refresh downloads")
                 }
             }
-            .task { await reloadTasks() }
+            .task {
+                while !Task.isCancelled {
+                    await reloadTasks()
+                    try? await Task.sleep(for: .seconds(1))
+                }
+            }
             .onChange(of: scenePhase) { phase in
                 if phase == .active { Task { await reloadTasks() } }
             }
