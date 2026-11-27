@@ -1,0 +1,66 @@
+name: Zelto iOS IPA Builder
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ipa-builder.yml"
+      - "codemagic.yaml"
+      - "scripts/**"
+      - "**/*.xcodeproj/**"
+      - "**/*.xcworkspace/**"
+      - "**/*.swift"
+      - "**/*.m"
+      - "**/*.mm"
+      - "**/*.h"
+      - "**/*.plist"
+      - "**/*.entitlements"
+      - "Package.swift"
+      - "Podfile"
+      - "Gemfile"
+permissions:
+  contents: read
+concurrency:
+  group: zelto-ipa-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    name: Build unsigned iOS IPA
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      ZELTO_BUILD_DIR: ${{ runner.temp }}/zelto-build
+      ZELTO_ARCHIVE_LOG: ${{ runner.temp }}/xcodebuild-archive.log
+    steps:
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26.2"
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Record runner details
+        run: |
+          mkdir -p "$ZELTO_BUILD_DIR"
+          { sw_vers; xcodebuild -version; xcodebuild -showsdks; } | tee "$ZELTO_BUILD_DIR/runner-setup.log"
+      - name: Build IPA
+        run: bash scripts/build_ipa.sh
+      - name: Upload IPA
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Zelto-unsigned-IPA-${{ github.run_number }}
+          path: Zelto.ipa
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Zelto-GitHubActions-Logs-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/xcodebuild-archive.log
+            ${{ runner.temp }}/zelto-build/runner-setup.log
+          if-no-files-found: warn
+          retention-days: 30
