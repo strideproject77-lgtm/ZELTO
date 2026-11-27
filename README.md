@@ -19,14 +19,14 @@ The IPA builder creates an unsigned IPA; signing and installation validation are
 
 ## Current implementation status
 
-- Download task state model: implemented
-- Atomic JSON persistence: implemented
+- Download task state model and atomic JSON persistence: implemented
 - Streaming HTTP transfer to disk: implemented
 - HTTP Range resume with ETag / Last-Modified validation: implemented
-- Progress persistence and transfer state coordination: implemented
-- Swift unit tests: 4 passing locally on Swift 6.2.1 / Linux
-- Local HTTP 206 resume smoke test: passed (1 MiB payload, byte-for-byte verified)
-- Automated interrupted-connection/restart integration test: pending
+- Process-restart recovery: implemented; persisted in-flight tasks reopen as paused and reconcile progress against the partial file size
+- HTTP 200 fallback truncates stale partial bytes when a server ignores Range: implemented
+- Recovery regression tests added: 2
+- Total Swift unit tests in repository: 6 (latest test run not yet verified)
+- Automated live-server interruption/restart integration test: pending
 - iOS background URLSession integration: not implemented
 - Xcode app target / IPA build: not implemented or run
 - Device validation: not run
