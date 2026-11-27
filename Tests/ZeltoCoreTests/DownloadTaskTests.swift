@@ -30,7 +30,7 @@ final class DownloadTaskTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let file = directory.appendingPathComponent("downloads.json")
         defer { try? FileManager.default.removeItem(at: directory) }
-        let task = try DownloadTask(sourceURL: URL(string: "https://example.com/a")!, destinationPath: "/tmp/a")
+        let task = try DownloadTask(sourceURL: URL(string: "https://example.com/a")!, destinationPath: directory.appendingPathComponent("partial.bin").path)
         let store = try DownloadStore(fileURL: file)
         try await store.insert(task)
         _ = try await store.update(id: task.id) { value in
@@ -44,5 +44,51 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertEqual(saved?.bytesWritten, 123)
         XCTAssertEqual(saved?.etag, "abc")
         XCTAssertEqual(saved?.resumeData, Data([9, 8, 7]))
+    }
+
+    func testStoreAutomaticallyRecoversInterruptedTaskUsingFileSize() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let metadata = directory.appendingPathComponent("downloads.json")
+        let partial = directory.appendingPathComponent("archive.part")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data(repeating: 0x5A, count: 37).write(to: partial)
+        let task = try DownloadTask(sourceURL: URL(string: "https://example.com/archive")!,
+                                    destinationPath: partial.path, status: .downloading,
+                                    bytesWritten: 20, expectedBytes: 100, etag: "\"stable\"",
+                                    resumeData: Data([1, 2, 3]))
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode([task]).write(to: metadata)
+
+        let recoveredStore = try DownloadStore(fileURL: metadata)
+        let recovered = await recoveredStore.task(id: task.id)
+        XCTAssertEqual(recovered?.status, .paused)
+        XCTAssertEqual(recovered?.bytesWritten, 37)
+        XCTAssertEqual(recovered?.expectedBytes, 100)
+        XCTAssertEqual(recovered?.etag, "\"stable\"")
+        XCTAssertNil(recovered?.resumeData)
+    }
+
+    func testStoreDropsInvalidOversizedPartialFileOnRecovery() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let metadata = directory.appendingPathComponent("downloads.json")
+        let partial = directory.appendingPathComponent("archive.part")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data(repeating: 0x5A, count: 120).write(to: partial)
+        let task = try DownloadTask(sourceURL: URL(string: "https://example.com/archive")!,
+                                    destinationPath: partial.path, status: .downloading,
+                                    bytesWritten: 120, expectedBytes: 100, etag: "\"stable\"")
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode([task]).write(to: metadata)
+
+        let recoveredStore = try DownloadStore(fileURL: metadata)
+        let recovered = await recoveredStore.task(id: task.id)
+        XCTAssertEqual(recovered?.status, .paused)
+        XCTAssertEqual(recovered?.bytesWritten, 0)
+        XCTAssertNil(recovered?.etag)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: partial.path))
     }
 }
