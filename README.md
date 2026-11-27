@@ -77,11 +77,11 @@ Background URLSession transfers can continue while the app is suspended and iOS 
 - Process-restart recovery: implemented; persisted in-flight tasks reopen as paused and reconcile progress against the partial file size
 - HTTP 200 fallback truncates stale partial bytes when a server ignores Range: implemented
 - iOS background URLSession manager: implemented and successfully compiled by the macOS/iOS SDK workflow
-- SwiftUI iOS app shell with add, list, pause, resume/retry controls and live progress refresh: implemented; initial simulator build passed
+- SwiftUI iOS app shell with add, list, pause, resume/retry controls and live progress refresh: implemented; simulator build passed for the latest app UI update
 - App-delegate background-session forwarding: wired into the app target; device lifecycle validation pending
 - Recovery regression tests added: 2
 - Total Swift unit tests in repository: 6; GitHub Actions test step passed for commit `8a9f414`
 - Automated live-server interruption/restart integration test: pending
-- Xcode project generation and iOS Simulator build: passed in GitHub Actions run `45995001793`
+- Xcode project generation and iOS Simulator build: passed in GitHub Actions run `45995248781`
 - Unsigned IPA archive: not yet verified
 - Device validation, including locked-screen transfer: not run
