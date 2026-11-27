@@ -1,6 +1,5 @@
 #if os(iOS)
 import Foundation
-import UIKit
 
 /// Owns a system-managed background URLSession download queue.
 ///
@@ -16,9 +15,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
     private let lock = NSLock()
     private var session: URLSession!
     private var backgroundEventsCompletion: (() -> Void)?
-    private var movedFiles: Set<UUID> = []
-    private var fileMoveFailures: [UUID: String] = [:]
-    private var destinations: [UUID: String] = [:]
+    private var fileHandoffs: [UUID: Task<Bool, Never>] = [:]
     private var pausingTaskIDs: Set<UUID> = []
     private let updates = BackgroundStoreUpdateQueue()
 
@@ -50,9 +47,6 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         } else {
             downloadTask = session.downloadTask(with: active.sourceURL)
         }
-        lock.lock()
-        destinations[id] = active.destinationPath
-        lock.unlock()
         downloadTask.taskDescription = id.uuidString
         downloadTask.resume()
         return downloadTask.taskIdentifier
@@ -111,9 +105,6 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         let activeTasks = await allDownloadTasks()
         let activeIDs = Set(activeTasks.compactMap { $0.taskDescription }.compactMap(UUID.init(uuidString:)))
         let savedTasks = await store.allTasks()
-        lock.lock()
-        for saved in savedTasks { destinations[saved.id] = saved.destinationPath }
-        lock.unlock()
 
         for saved in savedTasks where saved.status == .paused && activeIDs.contains(saved.id) {
             _ = try? await store.update(id: saved.id) { value in
@@ -147,24 +138,27 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
     public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                            didFinishDownloadingTo location: URL) {
         guard let id = UUID(uuidString: downloadTask.taskDescription ?? "") else { return }
-        lock.lock()
-        let destinationPath = destinations[id]
-        lock.unlock()
-        guard let destinationPath else {
-            lock.lock(); fileMoveFailures[id] = "Download destination was not restored"; lock.unlock()
-            return
+        let handoff = Task { [weak self] in
+            await self?.moveDownloadedFile(from: location, id: id) ?? false
         }
+        lock.lock()
+        fileHandoffs[id] = handoff
+        lock.unlock()
+    }
+
+    private func moveDownloadedFile(from location: URL, id: UUID) async -> Bool {
+        guard let saved = await store.task(id: id) else { return false }
+        let destination = URL(fileURLWithPath: saved.destinationPath)
         do {
-            let destination = URL(fileURLWithPath: destinationPath)
             try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(),
                                                     withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: destination.path) {
                 try FileManager.default.removeItem(at: destination)
             }
             try FileManager.default.moveItem(at: location, to: destination)
-            lock.lock(); movedFiles.insert(id); lock.unlock()
+            return true
         } catch {
-            lock.lock(); fileMoveFailures[id] = error.localizedDescription; lock.unlock()
+            return false
         }
     }
 
@@ -173,23 +167,21 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         guard let id = UUID(uuidString: task.taskDescription ?? "") else { return }
         lock.lock()
         let wasPausing = pausingTaskIDs.contains(id)
-        let moveFailure = fileMoveFailures.removeValue(forKey: id)
-        let didMove = movedFiles.remove(id) != nil
+        let handoff = fileHandoffs.removeValue(forKey: id)
         lock.unlock()
 
         if wasPausing { return }
         updates.enqueue { [store] in
+            let fileMoved = await handoff?.value ?? false
             _ = try? await store.update(id: id) { value in
                 guard value.status == .downloading else { return }
                 if let error {
                     let resumeData = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data
                     try value.pause(resumeData: resumeData)
-                } else if let moveFailure {
-                    try value.markFailed(message: moveFailure)
-                } else if didMove {
+                } else if fileMoved {
                     try value.complete()
                 } else {
-                    try value.pause()
+                    try value.markFailed(message: "iOS background download completed but its temporary file could not be moved.")
                 }
             }
         }
@@ -203,7 +195,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
             self.backgroundEventsCompletion = nil
             self.lock.unlock()
             if let completion {
-                DispatchQueue.main.async(execute: completion)
+                DispatchQueue.main.async(execute: DispatchWorkItem(block: completion))
             }
         }
     }
