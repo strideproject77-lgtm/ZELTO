@@ -25,7 +25,8 @@ The IPA builder creates an unsigned IPA; signing and installation validation are
 - HTTP Range resume with ETag / Last-Modified validation: implemented
 - Progress persistence and transfer state coordination: implemented
 - Swift unit tests: 4 passing locally on Swift 6.2.1 / Linux
-- Real-server interruption/resume integration tests: pending
+- Local HTTP 206 resume smoke test: passed (1 MiB payload, byte-for-byte verified)
+- Automated interrupted-connection/restart integration test: pending
 - iOS background URLSession integration: not implemented
 - Xcode app target / IPA build: not implemented or run
 - Device validation: not run
