@@ -21,8 +21,11 @@ The IPA builder creates an unsigned IPA; signing and installation validation are
 
 - Download task state model: implemented
 - Atomic JSON persistence: implemented
-- Swift unit tests: 3 passing locally on Swift 6.2 / Linux
-- Actual HTTP transfer engine: not implemented
+- Streaming HTTP transfer to disk: implemented
+- HTTP Range resume with ETag / Last-Modified validation: implemented
+- Progress persistence and transfer state coordination: implemented
+- Swift unit tests: 4 passing locally on Swift 6.2.1 / Linux
+- Real-server interruption/resume integration tests: pending
 - iOS background URLSession integration: not implemented
 - Xcode app target / IPA build: not implemented or run
 - Device validation: not run
