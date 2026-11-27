@@ -16,15 +16,14 @@ workflows:
           - codemagic.yaml
           - .github/workflows/ipa-builder.yml
           - scripts/**
-          - "**/*.xcodeproj/**"
-          - "**/*.xcworkspace/**"
-          - "**/*.swift"
-          - "**/*.m"
-          - "**/*.mm"
-          - "**/*.h"
-          - "**/*.plist"
-          - "**/*.entitlements"
-          - Package.swift
+          - "ios/**/*.xcodeproj/**"
+          - "ios/**/*.xcworkspace/**"
+          - "ios/**/*.swift"
+          - "ios/**/*.m"
+          - "ios/**/*.mm"
+          - "ios/**/*.h"
+          - "ios/**/*.plist"
+          - "ios/**/*.entitlements"
           - Podfile
           - Gemfile
     scripts:
