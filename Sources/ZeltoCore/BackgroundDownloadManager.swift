@@ -18,6 +18,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
     private var backgroundEventsCompletion: (() -> Void)?
     private var movedFiles: Set<UUID> = []
     private var fileMoveFailures: [UUID: String] = [:]
+    private var destinations: [UUID: String] = [:]
     private var pausingTaskIDs: Set<UUID> = []
     private let updates = BackgroundStoreUpdateQueue()
 
@@ -49,6 +50,9 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         } else {
             downloadTask = session.downloadTask(with: active.sourceURL)
         }
+        lock.lock()
+        destinations[id] = active.destinationPath
+        lock.unlock()
         downloadTask.taskDescription = id.uuidString
         downloadTask.resume()
         return downloadTask.taskIdentifier
@@ -107,6 +111,9 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         let activeTasks = await allDownloadTasks()
         let activeIDs = Set(activeTasks.compactMap { $0.taskDescription }.compactMap(UUID.init(uuidString:)))
         let savedTasks = await store.allTasks()
+        lock.lock()
+        for saved in savedTasks { destinations[saved.id] = saved.destinationPath }
+        lock.unlock()
 
         for saved in savedTasks where saved.status == .paused && activeIDs.contains(saved.id) {
             _ = try? await store.update(id: saved.id) { value in
@@ -139,31 +146,16 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
 
     public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                            didFinishDownloadingTo location: URL) {
-        guard let id = UUID(uuidString: downloadTask.taskDescription ?? ""),
-              let saved = updates.cachedDestination(for: id) else {
-            // Destination is retrieved from the durable store below when possible.
-            guard let id = UUID(uuidString: downloadTask.taskDescription ?? "") else { return }
-            Task { [weak self] in await self?.moveDownloadedFile(from: location, id: id) }
+        guard let id = UUID(uuidString: downloadTask.taskDescription ?? "") else { return }
+        lock.lock()
+        let destinationPath = destinations[id]
+        lock.unlock()
+        guard let destinationPath else {
+            lock.lock(); fileMoveFailures[id] = "Download destination was not restored"; lock.unlock()
             return
         }
         do {
-            let destination = URL(fileURLWithPath: saved)
-            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(),
-                                                    withIntermediateDirectories: true)
-            if FileManager.default.fileExists(atPath: destination.path) {
-                try FileManager.default.removeItem(at: destination)
-            }
-            try FileManager.default.moveItem(at: location, to: destination)
-            lock.lock(); movedFiles.insert(id); lock.unlock()
-        } catch {
-            lock.lock(); fileMoveFailures[id] = error.localizedDescription; lock.unlock()
-        }
-    }
-
-    private func moveDownloadedFile(from location: URL, id: UUID) async {
-        guard let saved = await store.task(id: id) else { return }
-        let destination = URL(fileURLWithPath: saved.destinationPath)
-        do {
+            let destination = URL(fileURLWithPath: destinationPath)
             try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(),
                                                     withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: destination.path) {
@@ -220,7 +212,6 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
 private final class BackgroundStoreUpdateQueue: @unchecked Sendable {
     private let lock = NSLock()
     private var tail: Task<Void, Never>?
-    private var destinations: [UUID: String] = [:]
 
     func enqueue(_ operation: @escaping @Sendable () async -> Void) {
         lock.lock()
@@ -230,12 +221,6 @@ private final class BackgroundStoreUpdateQueue: @unchecked Sendable {
             await operation()
         }
         lock.unlock()
-    }
-
-    func cachedDestination(for id: UUID) -> String? {
-        lock.lock()
-        defer { lock.unlock() }
-        return destinations[id]
     }
 }
 #endif
