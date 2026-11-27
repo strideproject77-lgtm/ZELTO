@@ -29,6 +29,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 120
     env:
+      ZELTO_SCHEME: Zelto
       ZELTO_BUILD_DIR: ${{ runner.temp }}/zelto-build
       ZELTO_ARCHIVE_LOG: ${{ runner.temp }}/xcodebuild-archive.log
     steps:
