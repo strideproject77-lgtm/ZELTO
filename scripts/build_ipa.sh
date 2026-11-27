@@ -7,8 +7,19 @@ if [[ "$(uname -s)" != "Darwin" ]] || ! command -v xcodebuild >/dev/null 2>&1; t
 fi
 PROJECT="$(find . -maxdepth 3 -name '*.xcodeproj' -not -path './.git/*' -print -quit)"
 WORKSPACE="$(find . -maxdepth 3 -name '*.xcworkspace' -not -path './.git/*' -print -quit)"
+if [[ -z "$PROJECT" && -z "$WORKSPACE" && -f ios/project.yml ]]; then
+  if ! command -v xcodegen >/dev/null 2>&1; then
+    if command -v brew >/dev/null 2>&1; then
+      brew install xcodegen
+    else
+      echo "ERROR: XcodeGen is required to generate ios/project.yml." >&2; exit 2
+    fi
+  fi
+  (cd ios && xcodegen generate)
+  PROJECT="$ROOT/ios/Zelto.xcodeproj"
+fi
 if [[ -z "$PROJECT" && -z "$WORKSPACE" ]]; then
-  echo "ERROR: No Xcode project/workspace exists yet; Zelto app source is not initialized." >&2; exit 2
+  echo "ERROR: No Xcode project/workspace or ios/project.yml was found." >&2; exit 2
 fi
 if [[ -n "$WORKSPACE" ]]; then
   LIST="$(xcodebuild -list -json -workspace "$WORKSPACE")"
