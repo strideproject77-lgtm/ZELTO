@@ -4,15 +4,14 @@ on:
   push:
     branches: [main]
     paths:
-      - "**/*.xcodeproj/**"
-      - "**/*.xcworkspace/**"
-      - "**/*.swift"
-      - "**/*.m"
-      - "**/*.mm"
-      - "**/*.h"
-      - "**/*.plist"
-      - "**/*.entitlements"
-      - "Package.swift"
+      - "ios/**/*.xcodeproj/**"
+      - "ios/**/*.xcworkspace/**"
+      - "ios/**/*.swift"
+      - "ios/**/*.m"
+      - "ios/**/*.mm"
+      - "ios/**/*.h"
+      - "ios/**/*.plist"
+      - "ios/**/*.entitlements"
       - "Podfile"
       - "Gemfile"
 permissions:
