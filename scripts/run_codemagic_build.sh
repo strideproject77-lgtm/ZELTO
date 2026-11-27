@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -uo pipefail
+set -o pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 DIR="$ZELTO_CODEMAGIC_LOG_DIR"
 if [[ -z "$DIR" ]]; then DIR="/tmp/zelto-codemagic-logs"; fi
