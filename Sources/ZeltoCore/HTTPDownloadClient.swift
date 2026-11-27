@@ -27,6 +27,7 @@ public enum HTTPDownloadError: Error, Equatable {
     case unacceptableStatusCode(Int)
     case invalidContentRange
     case destinationUnavailable
+    case incompleteTransfer(received: Int64, expected: Int64)
 }
 
 /// Streams an HTTP response to disk. Existing partial files are resumed with Range
@@ -186,6 +187,10 @@ private final class HTTPFileTransfer: NSObject, URLSessionDataDelegate, @uncheck
         let resultError = terminalError ?? error
         if let resultError { finish(.failure(resultError)); return }
         guard let destination else { finish(.failure(HTTPDownloadError.destinationUnavailable)); return }
+        if let expectedBytes, expectedBytes > 0, bytesWritten < expectedBytes {
+            finish(.failure(HTTPDownloadError.incompleteTransfer(received: bytesWritten, expected: expectedBytes)))
+            return
+        }
         let result = HTTPDownloadResult(destinationURL: destination, bytesWritten: bytesWritten,
                                         expectedBytes: expectedBytes, etag: etag,
                                         lastModified: lastModified)
