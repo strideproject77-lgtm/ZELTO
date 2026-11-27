@@ -13,7 +13,8 @@ Zelto is a cross-platform download manager project, beginning with iOS.
 
 - **Core tests:** GitHub Actions runs `swift test` on Ubuntu 24.04 for changes to `Package.swift`, `Sources/`, or `Tests/`.
 - **iOS compile:** GitHub Actions uses macOS 15 and the iOS SDK to compile the Swift package for `arm64-apple-ios16.0`.
-- **iOS IPA:** GitHub Actions and Codemagic build only when files under `ios/` or the iOS build configuration change. The repository does not yet contain an Xcode project, so an IPA build is not currently possible.
+- **iOS app:** `ios/project.yml` defines the XcodeGen app project; the macOS iOS-app workflow generates the Xcode project and builds the simulator target.
+- **iOS IPA:** GitHub Actions and Codemagic generate the Xcode project from `ios/project.yml` and run the shared unsigned IPA archive script.
 - **Codemagic log receiver:** configure environment group `zelto-github-logs` with `ZELTO_LOGS_GITHUB_TOKEN`, a fine-grained token with Contents read/write access to this repository. Latest logs are split into parts no larger than 4 MiB and published under `latest/` on `codemagic-logs`.
 
 The IPA builder creates an unsigned IPA; signing and installation validation are separate steps.
@@ -76,10 +77,10 @@ Background URLSession transfers can continue while the app is suspended and iOS 
 - Process-restart recovery: implemented; persisted in-flight tasks reopen as paused and reconcile progress against the partial file size
 - HTTP 200 fallback truncates stale partial bytes when a server ignores Range: implemented
 - iOS background URLSession manager: implemented and successfully compiled by the macOS/iOS SDK workflow
-- App-delegate forwarding example: documented; not yet wired into an app target
-- App-delegate forwarding example: documented; not yet wired into an app target
+- SwiftUI iOS app shell with add, list, pause and resume controls: added; simulator build pending
+- App-delegate background-session forwarding: wired into the app target; device lifecycle validation pending
 - Recovery regression tests added: 2
 - Total Swift unit tests in repository: 6; GitHub Actions test step passed for commit `8a9f414`
 - Automated live-server interruption/restart integration test: pending
-- Xcode app target / IPA build: not implemented or run
+- Xcode project is generated from `ios/project.yml`; app/IPA CI result pending
 - Device validation, including locked-screen transfer: not run
