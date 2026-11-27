@@ -1,20 +1,66 @@
 import Foundation
 
 /// Actor-isolated JSON persistence with atomic file replacement.
+/// On initialization, in-flight tasks are reconciled against their partial files
+/// and moved to paused so they can be safely resumed after process termination.
 public actor DownloadStore {
     private let fileURL: URL
     private var tasks: [UUID: DownloadTask]
 
     public init(fileURL: URL) throws {
         self.fileURL = fileURL
+        var loaded: [UUID: DownloadTask]
         if FileManager.default.fileExists(atPath: fileURL.path) {
             let data = try Data(contentsOf: fileURL)
             let decoded = try JSONDecoder.zelto.decode([DownloadTask].self, from: data)
-            self.tasks = Dictionary(uniqueKeysWithValues: decoded.map { ($0.id, $0) })
-        } else { self.tasks = [:] }
+            loaded = Dictionary(uniqueKeysWithValues: decoded.map { ($0.id, $0) })
+        } else {
+            loaded = [:]
+        }
+
+        var recovered = false
+        for (id, var task) in loaded where task.status == .downloading {
+            let partialURL = URL(fileURLWithPath: task.destinationPath)
+            let attributes = try? FileManager.default.attributesOfItem(atPath: partialURL.path)
+            let diskSize = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+
+            if diskSize < 0 || (task.expectedBytes.map { diskSize > $0 } ?? false) {
+                try? FileManager.default.removeItem(at: partialURL)
+                task.bytesWritten = 0
+                task.etag = nil
+                task.lastModified = nil
+                task.expectedBytes = nil
+            } else {
+                // The file is authoritative: a crash may occur after bytes hit disk
+                // but before the latest progress metadata is atomically persisted.
+                task.bytesWritten = diskSize
+                if diskSize == 0 {
+                    task.etag = nil
+                    task.lastModified = nil
+                }
+            }
+            task.status = .paused
+            task.resumeData = nil
+            task.updatedAt = Date()
+            loaded[id] = task
+            recovered = true
+        }
+        self.tasks = loaded
+
+        if recovered {
+            try FileManager.default.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let data = try JSONEncoder.zelto.encode(Array(loaded.values))
+            try data.write(to: fileURL, options: .atomic)
+        }
     }
 
-    public func allTasks() -> [DownloadTask] { tasks.values.sorted { $0.createdAt < $1.createdAt } }
+    public func allTasks() -> [DownloadTask] {
+        tasks.values.sorted { $0.createdAt < $1.createdAt }
+    }
+
     public func task(id: UUID) -> DownloadTask? { tasks[id] }
 
     public func insert(_ task: DownloadTask) throws {
