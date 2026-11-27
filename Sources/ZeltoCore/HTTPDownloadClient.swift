@@ -26,12 +26,13 @@ public enum HTTPDownloadError: Error, Equatable {
     case invalidHTTPResponse
     case unacceptableStatusCode(Int)
     case invalidContentRange
+    case validatorMismatch
     case destinationUnavailable
     case incompleteTransfer(received: Int64, expected: Int64)
 }
 
-/// Streams an HTTP response to disk. Existing partial files are resumed with Range
-/// only when a validator (ETag or Last-Modified) is available.
+/// Streams HTTP response bytes to disk. Partial files are resumed only with a
+/// validator, and a 200 response always truncates stale partial content.
 public final class HTTPDownloadClient: @unchecked Sendable {
     private let configuration: URLSessionConfiguration
 
@@ -57,7 +58,6 @@ public final class HTTPDownloadClient: @unchecked Sendable {
             existingSize = 0
         }
 
-        // Never append bytes from a potentially changed remote object.
         let canResume = existingSize > 0 && (task.etag != nil || task.lastModified != nil)
         let offset = canResume ? existingSize : 0
         if !canResume { try? manager.removeItem(at: destination) }
@@ -75,7 +75,6 @@ public final class HTTPDownloadClient: @unchecked Sendable {
                                       requestedOffset: offset, progress: progress)
     }
 
-    /// Exposed for deterministic tests and diagnostics; does not perform network I/O.
     public func request(for task: DownloadTask, existingBytes: Int64) -> URLRequest {
         var request = URLRequest(url: task.sourceURL)
         request.httpMethod = "GET"
@@ -99,6 +98,7 @@ private final class HTTPFileTransfer: NSObject, URLSessionDataDelegate, @uncheck
     private var expectedBytes: Int64?
     private var etag: String?
     private var lastModified: String?
+    private var expectedValidator: String?
     private var progress: (@Sendable (HTTPDownloadProgress) -> Void)?
     private var terminalError: Error?
     private var finished = false
@@ -113,6 +113,7 @@ private final class HTTPFileTransfer: NSObject, URLSessionDataDelegate, @uncheck
             self.destination = destination
             self.requestedOffset = requestedOffset
             self.bytesWritten = requestedOffset
+            self.expectedValidator = request.value(forHTTPHeaderField: "If-Range")
             self.progress = progress
             let queue = OperationQueue()
             queue.maxConcurrentOperationCount = 1
@@ -135,13 +136,24 @@ private final class HTTPFileTransfer: NSObject, URLSessionDataDelegate, @uncheck
             terminalError = HTTPDownloadError.unacceptableStatusCode(status)
             completionHandler(.cancel); return
         }
+
         if status == 206 {
             guard let range = http.value(forHTTPHeaderField: "Content-Range"),
-                  let parsed = Self.parseContentRange(range), parsed.start == requestedOffset else {
+                  let parsed = Self.parseContentRange(range),
+                  parsed.start == requestedOffset,
+                  let total = parsed.total,
+                  parsed.end < total else {
                 terminalError = HTTPDownloadError.invalidContentRange
                 completionHandler(.cancel); return
             }
-            expectedBytes = parsed.total
+            if let expectedValidator,
+               let responseValidator = http.value(forHTTPHeaderField: "ETag")
+                    ?? http.value(forHTTPHeaderField: "Last-Modified"),
+               responseValidator != expectedValidator {
+                terminalError = HTTPDownloadError.validatorMismatch
+                completionHandler(.cancel); return
+            }
+            expectedBytes = total
             do {
                 if !FileManager.default.fileExists(atPath: destination.path) {
                     _ = FileManager.default.createFile(atPath: destination.path, contents: nil)
@@ -155,8 +167,13 @@ private final class HTTPFileTransfer: NSObject, URLSessionDataDelegate, @uncheck
         } else {
             expectedBytes = http.expectedContentLength >= 0 ? http.expectedContentLength : nil
             do {
-                _ = FileManager.default.createFile(atPath: destination.path, contents: nil)
-                fileHandle = try FileHandle(forWritingTo: destination)
+                if !FileManager.default.fileExists(atPath: destination.path) {
+                    _ = FileManager.default.createFile(atPath: destination.path, contents: nil)
+                }
+                let handle = try FileHandle(forWritingTo: destination)
+                try handle.truncate(atOffset: 0)
+                try handle.seek(toOffset: 0)
+                fileHandle = handle
             } catch {
                 terminalError = error; completionHandler(.cancel); return
             }
