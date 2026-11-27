@@ -1,9 +1,9 @@
 import SwiftUI
+import UIKit
 import ZeltoCore
 
 struct DownloadListView: View {
     @Environment(\.scenePhase) private var scenePhase
-    @EnvironmentObject private var unusedEnvironment: EmptyEnvironmentObject
     @State private var tasks: [DownloadTask] = []
     @State private var sourceURL = ""
     @State private var errorMessage: String?
@@ -17,9 +17,9 @@ struct DownloadListView: View {
         NavigationStack {
             Group {
                 if let startupError = appDelegate?.startupError {
-                    ContentUnavailableView("Storage unavailable", systemImage: "externaldrive.badge.exclamationmark", description: Text(startupError))
+                    EmptyStateView(title: "Storage unavailable", systemImage: "externaldrive.badge.exclamationmark", message: startupError)
                 } else if tasks.isEmpty {
-                    ContentUnavailableView("No downloads yet", systemImage: "arrow.down.circle", description: Text("Paste a direct file URL below to start your first download."))
+                    EmptyStateView(title: "No downloads yet", systemImage: "arrow.down.circle", message: "Paste a direct file URL below to start your first download.")
                 } else {
                     List(tasks) { task in
                         VStack(alignment: .leading, spacing: 6) {
@@ -36,6 +36,17 @@ struct DownloadListView: View {
                             .foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 4)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            if task.status == .downloading {
+                                Button("Pause", systemImage: "pause.fill") {
+                                    Task { await pauseDownload(task.id) }
+                                }.tint(.orange)
+                            } else if task.status == .paused || task.status == .queued {
+                                Button("Resume", systemImage: "play.fill") {
+                                    Task { await resumeDownload(task.id) }
+                                }.tint(.green)
+                            }
+                        }
                     }
                 }
             }
@@ -44,7 +55,7 @@ struct DownloadListView: View {
                 addDownloadPanel
             }
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
                         Task { await reloadTasks() }
                     } label: {
@@ -54,7 +65,7 @@ struct DownloadListView: View {
                 }
             }
             .task { await reloadTasks() }
-            .onChange(of: scenePhase) { _, phase in
+            .onChange(of: scenePhase) { phase in
                 if phase == .active { Task { await reloadTasks() } }
             }
             .alert("Download couldn't start", isPresented: Binding(
@@ -99,6 +110,26 @@ struct DownloadListView: View {
     }
 
     @MainActor
+    private func pauseDownload(_ id: UUID) async {
+        do {
+            try await appDelegate?.backgroundDownloads?.pause(id: id)
+            await reloadTasks()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func resumeDownload(_ id: UUID) async {
+        do {
+            _ = try await appDelegate?.backgroundDownloads?.enqueue(id: id)
+            await reloadTasks()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
     private func addDownload() async {
         guard let store = appDelegate?.downloadStore,
               let manager = appDelegate?.backgroundDownloads else {
@@ -137,4 +168,22 @@ struct DownloadListView: View {
     }
 }
 
-private struct EmptyEnvironmentObject: ObservableObject {}
+private struct EmptyStateView: View {
+    let title: String
+    let systemImage: String
+    let message: String
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.system(size: 42))
+                .foregroundStyle(.secondary)
+            Text(title).font(.headline)
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(32)
+    }
+}
