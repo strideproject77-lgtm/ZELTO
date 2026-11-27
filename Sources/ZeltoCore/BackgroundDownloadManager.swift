@@ -6,7 +6,7 @@ import Foundation
 /// The host app must forward
 /// `application(_:handleEventsForBackgroundURLSession:completionHandler:)`
 /// to `handleEventsForBackgroundURLSession(identifier:completionHandler:)`.
-/// The session identifier must remain stable across app launches.
+/// Keep the manager alive for the app lifetime and keep its identifier stable.
 public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     public static let defaultIdentifier = "com.ahmiidev.zelto.background-downloads"
 
@@ -15,7 +15,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
     private let lock = NSLock()
     private var session: URLSession!
     private var backgroundEventsCompletion: (() -> Void)?
-    private var fileHandoffs: [UUID: Task<Bool, Never>] = [:]
+    private var fileMoveResults: [UUID: Bool] = [:]
     private var pausingTaskIDs: Set<UUID> = []
     private let updates = BackgroundStoreUpdateQueue()
 
@@ -47,16 +47,16 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         } else {
             downloadTask = session.downloadTask(with: active.sourceURL)
         }
-        downloadTask.taskDescription = id.uuidString
+        downloadTask.taskDescription = Self.makeTaskDescription(id: id, destinationPath: active.destinationPath)
         downloadTask.resume()
         return downloadTask.taskIdentifier
     }
 
     /// Requests a cooperative pause. iOS may provide opaque resume data; if it
-    /// does not, the next enqueue safely restarts using the normal HTTP request.
+    /// does not, the next enqueue safely restarts using a fresh request.
     public func pause(id: UUID) async throws {
         let tasks = await allDownloadTasks()
-        guard let task = tasks.first(where: { $0.taskDescription == id.uuidString }) else {
+        guard let task = tasks.first(where: { Self.parseTaskDescription($0.taskDescription)?.id == id }) else {
             _ = try await store.update(id: id) { value in
                 if value.status == .downloading { try value.pause() }
             }
@@ -64,7 +64,6 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         }
 
         lock.withLock { pausingTaskIDs.insert(id) }
-
         await withCheckedContinuation { continuation in
             task.cancel { [weak self] resumeData in
                 guard let self else { continuation.resume(); return }
@@ -80,8 +79,8 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
     }
 
     /// Call from the app delegate when iOS relaunches the app for background
-    /// URLSession events. Retains the completion handler until all delegate
-    /// events have been delivered.
+    /// URLSession events. Retains the completion handler until delegate events
+    /// and their durable metadata updates have finished.
     public func handleEventsForBackgroundURLSession(
         identifier: String,
         completionHandler: @escaping () -> Void
@@ -99,7 +98,9 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
     /// background transfer daemon after an app relaunch.
     public func reconcileAfterRelaunch() async {
         let activeTasks = await allDownloadTasks()
-        let activeIDs = Set(activeTasks.compactMap { $0.taskDescription }.compactMap(UUID.init(uuidString:)))
+        let activeIDs = Set(activeTasks.compactMap {
+            Self.parseTaskDescription($0.taskDescription)?.id
+        })
         let savedTasks = await store.allTasks()
 
         for saved in savedTasks where saved.status == .paused && activeIDs.contains(saved.id) {
@@ -120,7 +121,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
     public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                            didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
                            totalBytesExpectedToWrite: Int64) {
-        guard let id = UUID(uuidString: downloadTask.taskDescription ?? "") else { return }
+        guard let id = Self.parseTaskDescription(downloadTask.taskDescription)?.id else { return }
         let expected = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : nil
         updates.enqueue { [store] in
             _ = try? await store.update(id: id) { task in
@@ -133,18 +134,12 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
 
     public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                            didFinishDownloadingTo location: URL) {
-        guard let id = UUID(uuidString: downloadTask.taskDescription ?? "") else { return }
-        let handoff = Task { [weak self] in
-            await self?.moveDownloadedFile(from: location, id: id) ?? false
-        }
-        lock.lock()
-        fileHandoffs[id] = handoff
-        lock.unlock()
-    }
-
-    private func moveDownloadedFile(from location: URL, id: UUID) async -> Bool {
-        guard let saved = await store.task(id: id) else { return false }
-        let destination = URL(fileURLWithPath: saved.destinationPath)
+        // iOS requires the temporary download file to be moved before this
+        // delegate callback returns. The destination is embedded in taskDescription
+        // so this operation does not need an asynchronous store lookup.
+        guard let metadata = Self.parseTaskDescription(downloadTask.taskDescription) else { return }
+        let destination = URL(fileURLWithPath: metadata.destinationPath)
+        let moved: Bool
         do {
             try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(),
                                                     withIntermediateDirectories: true)
@@ -152,23 +147,25 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
                 try FileManager.default.removeItem(at: destination)
             }
             try FileManager.default.moveItem(at: location, to: destination)
-            return true
+            moved = true
         } catch {
-            return false
+            moved = false
         }
+        lock.lock()
+        fileMoveResults[metadata.id] = moved
+        lock.unlock()
     }
 
     public func urlSession(_ session: URLSession, task: URLSessionTask,
                            didCompleteWithError error: Error?) {
-        guard let id = UUID(uuidString: task.taskDescription ?? "") else { return }
+        guard let id = Self.parseTaskDescription(task.taskDescription)?.id else { return }
         lock.lock()
         let wasPausing = pausingTaskIDs.contains(id)
-        let handoff = fileHandoffs.removeValue(forKey: id)
+        let fileMoved = fileMoveResults.removeValue(forKey: id) ?? false
         lock.unlock()
 
         if wasPausing { return }
         updates.enqueue { [store] in
-            let fileMoved = await handoff?.value ?? false
             _ = try? await store.update(id: id) { value in
                 guard value.status == .downloading else { return }
                 if let error {
@@ -195,6 +192,22 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
                 DispatchQueue.main.async(execute: DispatchWorkItem(block: completion))
             }
         }
+    }
+
+    private static func makeTaskDescription(id: UUID, destinationPath: String) -> String {
+        let encodedPath = Data(destinationPath.utf8).base64EncodedString()
+        return "\(id.uuidString)|\(encodedPath)"
+    }
+
+    private static func parseTaskDescription(_ value: String?) -> (id: UUID, destinationPath: String)? {
+        guard let value else { return nil }
+        let parts = value.split(separator: "|", maxSplits: 1)
+        guard parts.count == 2,
+              let id = UUID(uuidString: String(parts[0])),
+              let pathData = Data(base64Encoded: String(parts[1])),
+              let path = String(data: pathData, encoding: .utf8),
+              !path.isEmpty else { return nil }
+        return (id, path)
     }
 }
 
