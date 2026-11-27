@@ -1,0 +1,29 @@
+name: Zelto
+options:
+  minimumXcodeGenVersion: 2.40.0
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+packages:
+  ZeltoCore:
+    path: ..
+targets:
+  Zelto:
+    type: application
+    platform: iOS
+    sources:
+      - path: ZeltoApp
+    dependencies:
+      - package: ZeltoCore
+        product: ZeltoCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ahmiidev.zelto
+        PRODUCT_NAME: Zelto
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Zelto
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+        CODE_SIGNING_ALLOWED: NO
