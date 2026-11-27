@@ -6,6 +6,7 @@ on:
     paths:
       - "ios/**/*.xcodeproj/**"
       - "ios/**/*.xcworkspace/**"
+      - "ios/project.yml"
       - "ios/**/*.swift"
       - "ios/**/*.m"
       - "ios/**/*.mm"
