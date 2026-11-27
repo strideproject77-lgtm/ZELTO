@@ -63,9 +63,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
             return
         }
 
-        lock.lock()
-        pausingTaskIDs.insert(id)
-        lock.unlock()
+        lock.withLock { pausingTaskIDs.insert(id) }
 
         await withCheckedContinuation { continuation in
             task.cancel { [weak self] resumeData in
@@ -74,9 +72,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
                     _ = try? await self.store.update(id: id) { value in
                         if value.status == .downloading { try value.pause(resumeData: resumeData) }
                     }
-                    self.lock.lock()
-                    self.pausingTaskIDs.remove(id)
-                    self.lock.unlock()
+                    self.lock.withLock { self.pausingTaskIDs.remove(id) }
                     continuation.resume()
                 }
             }
@@ -190,10 +186,11 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
     public func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         updates.enqueue { [weak self] in
             guard let self else { return }
-            self.lock.lock()
-            let completion = self.backgroundEventsCompletion
-            self.backgroundEventsCompletion = nil
-            self.lock.unlock()
+            let completion = self.lock.withLock {
+                let handler = self.backgroundEventsCompletion
+                self.backgroundEventsCompletion = nil
+                return handler
+            }
             if let completion {
                 DispatchQueue.main.async(execute: DispatchWorkItem(block: completion))
             }
