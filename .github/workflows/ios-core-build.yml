@@ -1,0 +1,25 @@
+name: Zelto iOS Core Build
+on:
+  push:
+    branches: [main]
+    paths: ["Package.swift", "Sources/**", ".github/workflows/ios-core-build.yml"]
+  pull_request:
+    paths: ["Package.swift", "Sources/**", ".github/workflows/ios-core-build.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zelto-ios-core-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build-ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show Apple toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+      - name: Compile ZeltoCore for iOS
+        run: |
+          swift build --triple arm64-apple-ios16.0 --sdk "$(xcrun --sdk iphoneos --show-sdk-path)"
