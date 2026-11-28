@@ -148,7 +148,7 @@ public final class BackgroundParallelDownloadCoordinator: NSObject, URLSessionDo
         let tasks = await allTasks().filter { Self.metadata(from: $0.taskDescription)?.taskID == id }
         lock.withLock { pausingIDs.insert(id) }
         for task in tasks { task.cancel() }
-        let durable = durableByteCount(for: id)
+        let durable = await store.task(id: id).map { durableByteCount(for: $0) } ?? 0
         _ = try? await store.update(id: id) { value in
             if value.status == .downloading {
                 value.bytesWritten = durable
@@ -297,8 +297,8 @@ public final class BackgroundParallelDownloadCoordinator: NSObject, URLSessionDo
         if lock.withLock({ deletingIDs.contains(metadata.taskID) || pausingIDs.contains(metadata.taskID) }) { return }
         if error != nil || result?.valid != true {
             cancelSiblings(for: metadata.taskID, excluding: task.taskIdentifier)
-            let durable = durableByteCount(for: metadata.taskID)
             Task {
+                let durable = await self.durableByteCount(for: metadata.taskID)
                 _ = try? await store.update(id: metadata.taskID) { value in
                     guard value.status == .downloading else { return }
                     value.bytesWritten = durable
@@ -418,22 +418,6 @@ public final class BackgroundParallelDownloadCoordinator: NSObject, URLSessionDo
             }
             for task in siblings { task.cancel() }
         }
-    }
-
-    private func durableByteCount(for id: UUID) -> Int64 {
-        guard let task = try? storeSnapshot(id: id) else { return 0 }
-        return durableByteCount(for: task)
-    }
-
-    private func storeSnapshot(id: UUID) throws -> DownloadTask {
-        // Only used for the stable destination path; the manifest remains the
-        // authority for which segment bytes are durable.
-        let semaphore = DispatchSemaphore(value: 0)
-        var result: DownloadTask?
-        Task { result = await store.task(id: id); semaphore.signal() }
-        semaphore.wait()
-        guard let result else { throw DownloadStoreError.taskNotFound }
-        return result
     }
 
     private func durableByteCount(for task: DownloadTask) -> Int64 {
