@@ -126,6 +126,9 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
             _ = try await store.update(id: id) { value in
                 if value.status == .downloading { try value.pause() }
             }
+            if let latest = await store.task(id: id) {
+                await syncLiveActivity(for: latest, force: true)
+            }
             return
         }
 
