@@ -10,14 +10,23 @@ public struct DownloadActivityAttributes: ActivityAttributes {
         public var expectedBytes: Int64?
         public var status: String
         public var updatedAt: Date
+        public var speedBytesPerSecond: Double?
+        public var averageSpeedBytesPerSecond: Double?
+        public var estimatedSecondsRemaining: Int?
 
         public init(progress: Double, bytesWritten: Int64, expectedBytes: Int64?,
-                    status: String, updatedAt: Date = Date()) {
+                    status: String, updatedAt: Date = Date(),
+                    speedBytesPerSecond: Double? = nil,
+                    averageSpeedBytesPerSecond: Double? = nil,
+                    estimatedSecondsRemaining: Int? = nil) {
             self.progress = min(1, max(0, progress))
             self.bytesWritten = max(0, bytesWritten)
             self.expectedBytes = expectedBytes
             self.status = status
             self.updatedAt = updatedAt
+            self.speedBytesPerSecond = speedBytesPerSecond
+            self.averageSpeedBytesPerSecond = averageSpeedBytesPerSecond
+            self.estimatedSecondsRemaining = estimatedSecondsRemaining
         }
     }
 
