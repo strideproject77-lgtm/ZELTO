@@ -53,6 +53,19 @@ struct ZeltoDownloadLiveActivity: Widget {
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
+
+                HStack(spacing: 12) {
+                    Label(Self.speedText(context.state.speedBytesPerSecond), systemImage: "speedometer")
+                    if let eta = context.state.estimatedSecondsRemaining {
+                        Label(Self.durationText(eta), systemImage: "clock")
+                    }
+                    Spacer(minLength: 0)
+                    if let average = context.state.averageSpeedBytesPerSecond, average > 0 {
+                        Text("AVG " + Self.speedText(average))
+                    }
+                }
+                .font(.caption2.monospacedDigit().weight(.medium))
+                .foregroundStyle(.secondary)
             }
             .padding(16)
             .activityBackgroundTint(Color(red: 0.035, green: 0.075, blue: 0.16))
@@ -83,6 +96,8 @@ struct ZeltoDownloadLiveActivity: Widget {
                         HStack {
                             Text(ByteCountFormatter.string(fromByteCount: context.state.bytesWritten, countStyle: .file))
                             Spacer()
+                            Text(Self.speedText(context.state.speedBytesPerSecond))
+                            Spacer()
                             Text(context.state.status)
                         }
                         .font(.caption2.monospacedDigit())
@@ -100,5 +115,17 @@ struct ZeltoDownloadLiveActivity: Widget {
                     .foregroundStyle(.cyan)
             }
         }
+    }
+
+    private static func speedText(_ bytesPerSecond: Double?) -> String {
+        guard let bytesPerSecond, bytesPerSecond > 0 else { return "Waiting" }
+        return ByteCountFormatter.string(fromByteCount: Int64(bytesPerSecond), countStyle: .file) + "/s"
+    }
+
+    private static func durationText(_ seconds: Int) -> String {
+        let value = max(0, seconds)
+        if value >= 3600 { return "\(value / 3600)h \((value % 3600) / 60)m" }
+        if value >= 60 { return "\(value / 60)m \(value % 60)s" }
+        return "\(value)s"
     }
 }
