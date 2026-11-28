@@ -81,6 +81,17 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
             _ = try await store.update(id: id) { try $0.retry() }
         }
         let active = try await store.update(id: id) { try $0.start() }
+        let telemetryStart = Date()
+        lock.withLock {
+            speedTelemetry[id] = DownloadSpeedTelemetry(
+                lastBytes: active.bytesWritten,
+                lastDate: telemetryStart,
+                startedBytes: active.bytesWritten,
+                startedAt: telemetryStart,
+                smoothedSpeed: 0,
+                lastPositiveAt: telemetryStart
+            )
+        }
 
         let downloadTask: URLSessionDownloadTask
         if let resumeData = active.resumeData, !resumeData.isEmpty {
@@ -469,9 +480,12 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         } ?? 0
         let liveSpeed = task.status == .downloading ? (telemetry?.smoothedSpeed ?? 0) : 0
         let remaining = task.expectedBytes.map { max(0, $0 - task.bytesWritten) }
-        let eta = (remaining ?? 0) > 0 && liveSpeed > 0
-            ? Int(ceil(Double(remaining!) / liveSpeed))
-            : nil
+        let eta: Int?
+        if let remaining, remaining > 0, liveSpeed > 0 {
+            eta = Int(ceil(Double(remaining) / liveSpeed))
+        } else {
+            eta = nil
+        }
         let state = DownloadActivityAttributes.ContentState(
             progress: task.progress ?? 0,
             bytesWritten: task.bytesWritten,
