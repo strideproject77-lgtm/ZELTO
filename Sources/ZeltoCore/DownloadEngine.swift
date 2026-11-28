@@ -1,14 +1,17 @@
 import Foundation
 
-/// Coordinates a transfer with durable task metadata. Progress writes are serialized
-/// so the final completion/pause transition cannot overtake earlier progress updates.
+/// Coordinates durable task metadata and chooses parallel HTTP ranges when
+/// the origin advertises safe, validator-backed byte-range support.
 public actor DownloadEngine {
     private let store: DownloadStore
     private let client: HTTPDownloadClient
+    private let parallelClient: ParallelHTTPDownloadClient
 
-    public init(store: DownloadStore, client: HTTPDownloadClient = HTTPDownloadClient()) {
+    public init(store: DownloadStore, client: HTTPDownloadClient = HTTPDownloadClient(),
+                parallelClient: ParallelHTTPDownloadClient = ParallelHTTPDownloadClient()) {
         self.store = store
         self.client = client
+        self.parallelClient = parallelClient
     }
 
     @discardableResult
@@ -22,11 +25,10 @@ public actor DownloadEngine {
         let store = self.store
 
         do {
-            let result = try await client.download(task: active) { progress in
+            let parallelResult = try await parallelClient.downloadIfSupported(task: active) { progress in
                 progressQueue.enqueue {
                     _ = try? await store.update(id: id) { task in
                         guard task.status == .downloading else { return }
-                        // A server may ignore Range and send a fresh 200 response.
                         if progress.bytesWritten < task.bytesWritten {
                             task.bytesWritten = 0
                             task.expectedBytes = nil
@@ -40,6 +42,31 @@ public actor DownloadEngine {
                     }
                 }
             }
+
+            let result: HTTPDownloadResult
+            if let parallelResult {
+                result = parallelResult
+            } else {
+                result = try await client.download(task: active) { progress in
+                    progressQueue.enqueue {
+                        _ = try? await store.update(id: id) { task in
+                            guard task.status == .downloading else { return }
+                            // A server may ignore Range and send a fresh 200 response.
+                            if progress.bytesWritten < task.bytesWritten {
+                                task.bytesWritten = 0
+                                task.expectedBytes = nil
+                                task.etag = nil
+                                task.lastModified = nil
+                            }
+                            try task.recordProgress(bytesWritten: progress.bytesWritten,
+                                                    expectedBytes: progress.expectedBytes,
+                                                    etag: progress.etag,
+                                                    lastModified: progress.lastModified)
+                        }
+                    }
+                }
+            }
+
             await progressQueue.drain()
             _ = try await store.update(id: id) { task in
                 try task.recordProgress(bytesWritten: result.bytesWritten,
