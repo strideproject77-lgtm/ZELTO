@@ -180,9 +180,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
                     do {
                         try value.complete(actualBytes: size)
                     } catch {
-                        value.status = .failed
-                        value.failureMessage = "Downloaded file size did not match the server's expected size."
-                        value.updatedAt = Date()
+                        try value.markFailed(message: "Downloaded file size did not match the server's expected size.")
                     }
                 } else {
                     try value.markFailed(message: "iOS background download completed but its temporary file could not be moved.")
