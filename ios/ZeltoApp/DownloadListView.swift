@@ -11,7 +11,7 @@ struct DownloadListView: View {
     @State private var isAdding = false
     @State private var showDeleteConfirmation = false
     @State private var pendingDeleteID: UUID?
-    @State private var speedSamples: [UUID: SpeedSample] = [:]
+    @State private var speedSamples: [UUID: [SpeedSample]] = [:]
     @State private var liveSpeeds: [UUID: Double] = [:]
     @State private var peakSpeeds: [UUID: Double] = [:]
     @State private var speedHistory: [UUID: [Double]] = [:]
@@ -225,26 +225,33 @@ struct DownloadListView: View {
         let updated = await appDelegate.downloadStore?.allTasks() ?? []
         let now = Date()
         for task in updated where task.status == .downloading {
-            if let previous = speedSamples[task.id] {
-                let elapsed = now.timeIntervalSince(previous.date)
-                if elapsed >= 0.18 {
-                    let delta = max(0, task.bytesWritten - previous.bytes)
+            var samples = speedSamples[task.id] ?? []
+            samples.append(SpeedSample(bytes: task.bytesWritten, date: now))
+            samples = samples.filter { now.timeIntervalSince($0.date) <= 2.0 }
+
+            // Measure over a rolling window instead of a single 250 ms slice.
+            // This prevents tiny callback bursts from making the speed jump wildly.
+            if let baseline = samples.first(where: { now.timeIntervalSince($0.date) >= 0.9 }) {
+                let elapsed = now.timeIntervalSince(baseline.date)
+                if elapsed > 0 {
+                    let delta = max(0, task.bytesWritten - baseline.bytes)
                     let measured = Double(delta) / elapsed
                     let previousSpeed = liveSpeeds[task.id] ?? measured
-                    // Favor the newest sample so the meter reacts like IDM,
-                    // while retaining a small amount of smoothing to avoid flicker.
-                    let instant = previousSpeed * 0.20 + measured * 0.80
-                    liveSpeeds[task.id] = instant
-                    peakSpeeds[task.id] = max(peakSpeeds[task.id] ?? 0, measured)
+                    // Smooth the one-second rolling rate while still reacting quickly.
+                    let stableSpeed = previousSpeed == 0
+                        ? measured
+                        : previousSpeed * 0.45 + measured * 0.55
+                    liveSpeeds[task.id] = stableSpeed
+                    if measured > 0 {
+                        peakSpeeds[task.id] = max(peakSpeeds[task.id] ?? 0, measured)
+                    }
                     var history = speedHistory[task.id] ?? []
                     history.append(measured)
                     speedHistory[task.id] = Array(history.suffix(24))
-                    speedSamples[task.id] = SpeedSample(bytes: task.bytesWritten, date: now)
+                    samples = samples.filter { $0.date > baseline.date }
                 }
-            } else {
-                speedSamples[task.id] = SpeedSample(bytes: task.bytesWritten, date: now)
-                liveSpeeds[task.id] = 0
             }
+            speedSamples[task.id] = samples
         }
         let activeIDs = Set(updated.filter { $0.status == .downloading }.map(\.id))
         liveSpeeds = liveSpeeds.filter { activeIDs.contains($0.key) }
