@@ -13,6 +13,8 @@ struct DownloadListView: View {
     @State private var pendingDeleteID: UUID?
     @State private var speedSamples: [UUID: SpeedSample] = [:]
     @State private var liveSpeeds: [UUID: Double] = [:]
+    @State private var peakSpeeds: [UUID: Double] = [:]
+    @State private var speedHistory: [UUID: [Double]] = [:]
 
     private struct SpeedSample {
         let bytes: Int64
@@ -65,6 +67,9 @@ struct DownloadListView: View {
                                         DownloadCard(
                                             task: task,
                                             speed: liveSpeeds[task.id] ?? 0,
+                                            peakSpeed: peakSpeeds[task.id] ?? 0,
+                                            averageSpeed: averageSpeed(for: task.id),
+                                            speedHistory: speedHistory[task.id] ?? [],
                                             onPause: { Task { await pauseDownload(task.id) } },
                                             onResume: { Task { await resumeDownload(task.id) } },
                                             onDelete: {
@@ -222,11 +227,18 @@ struct DownloadListView: View {
         for task in updated where task.status == .downloading {
             if let previous = speedSamples[task.id] {
                 let elapsed = now.timeIntervalSince(previous.date)
-                if elapsed >= 0.35 {
+                if elapsed >= 0.18 {
                     let delta = max(0, task.bytesWritten - previous.bytes)
                     let measured = Double(delta) / elapsed
                     let previousSpeed = liveSpeeds[task.id] ?? measured
-                    liveSpeeds[task.id] = previousSpeed * 0.35 + measured * 0.65
+                    // Favor the newest sample so the meter reacts like IDM,
+                    // while retaining a small amount of smoothing to avoid flicker.
+                    let instant = previousSpeed * 0.20 + measured * 0.80
+                    liveSpeeds[task.id] = instant
+                    peakSpeeds[task.id] = max(peakSpeeds[task.id] ?? 0, measured)
+                    var history = speedHistory[task.id] ?? []
+                    history.append(measured)
+                    speedHistory[task.id] = Array(history.suffix(24))
                     speedSamples[task.id] = SpeedSample(bytes: task.bytesWritten, date: now)
                 }
             } else {
@@ -237,7 +249,15 @@ struct DownloadListView: View {
         let activeIDs = Set(updated.filter { $0.status == .downloading }.map(\.id))
         liveSpeeds = liveSpeeds.filter { activeIDs.contains($0.key) }
         speedSamples = speedSamples.filter { activeIDs.contains($0.key) }
+        peakSpeeds = peakSpeeds.filter { activeIDs.contains($0.key) }
+        speedHistory = speedHistory.filter { activeIDs.contains($0.key) }
         tasks = updated
+    }
+
+    private func averageSpeed(for id: UUID) -> Double {
+        let samples = speedHistory[id] ?? []
+        guard !samples.isEmpty else { return 0 }
+        return samples.reduce(0, +) / Double(samples.count)
     }
 
     @MainActor
@@ -254,6 +274,8 @@ struct DownloadListView: View {
             try await appDelegate.backgroundDownloads?.delete(id: id)
             liveSpeeds[id] = nil
             speedSamples[id] = nil
+            peakSpeeds[id] = nil
+            speedHistory[id] = nil
             await reloadTasks()
         } catch { errorMessage = error.localizedDescription }
     }
@@ -322,6 +344,9 @@ struct DownloadListView: View {
 private struct DownloadCard: View {
     let task: DownloadTask
     let speed: Double
+    let peakSpeed: Double
+    let averageSpeed: Double
+    let speedHistory: [Double]
     let onPause: () -> Void
     let onResume: () -> Void
     let onDelete: () -> Void
@@ -411,12 +436,32 @@ private struct DownloadCard: View {
             }
 
             if isActive {
-                HStack(spacing: 0) {
-                    MetricValue(title: "SPEED", value: speed > 0 ? ByteCountFormatter.string(fromByteCount: Int64(speed), countStyle: .file) + "/s" : "Measuring")
-                    Spacer()
-                    MetricValue(title: "TIME LEFT", value: remaining)
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .center) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("LIVE SPEED")
+                                .font(.system(size: 9, weight: .bold))
+                                .tracking(1.1)
+                                .foregroundStyle(.secondary)
+                            Text(speed > 0 ? Self.speedString(speed) + "/s" : "Measuring…")
+                                .font(.system(size: 22, weight: .bold, design: .rounded).monospacedDigit())
+                                .foregroundStyle(.cyan)
+                                .contentTransition(.numericText())
+                        }
+                        Spacer()
+                        SpeedHistoryGraph(samples: speedHistory)
+                            .frame(width: 92, height: 34)
+                            .accessibilityLabel("Recent download speed graph")
+                    }
+                    HStack(spacing: 0) {
+                        MetricValue(title: "AVERAGE", value: averageSpeed > 0 ? Self.speedString(averageSpeed) + "/s" : "—")
+                        Spacer(minLength: 8)
+                        MetricValue(title: "PEAK", value: peakSpeed > 0 ? Self.speedString(peakSpeed) + "/s" : "—")
+                        Spacer(minLength: 8)
+                        MetricValue(title: "TIME LEFT", value: remaining)
+                    }
                 }
-                .padding(11)
+                .padding(12)
                 .background(.black.opacity(0.17), in: RoundedRectangle(cornerRadius: 12))
             }
 
@@ -461,6 +506,18 @@ private struct DownloadCard: View {
         .overlay(RoundedRectangle(cornerRadius: 20).stroke(.white.opacity(0.08), lineWidth: 1))
     }
 
+    private static func speedString(_ bytesPerSecond: Double) -> String {
+        let value = max(0, bytesPerSecond)
+        let units = ["B", "KB", "MB", "GB"]
+        var scaled = value
+        var index = 0
+        while scaled >= 1024 && index < units.count - 1 {
+            scaled /= 1024
+            index += 1
+        }
+        return String(format: scaled >= 100 ? "%.0f %@" : (scaled >= 10 ? "%.1f %@" : "%.2f %@"), scaled, units[index])
+    }
+
     private static func duration(_ seconds: Int) -> String {
         let value = max(0, seconds)
         let hours = value / 3600
@@ -469,6 +526,27 @@ private struct DownloadCard: View {
         if hours > 0 { return "\(hours)h \(minutes)m" }
         if minutes > 0 { return "\(minutes)m \(secs)s" }
         return "\(secs)s"
+    }
+}
+
+private struct SpeedHistoryGraph: View {
+    let samples: [Double]
+
+    var body: some View {
+        GeometryReader { proxy in
+            let maximum = max(samples.max() ?? 1, 1)
+            Path { path in
+                guard samples.count > 1 else { return }
+                for (index, sample) in samples.enumerated() {
+                    let x = proxy.size.width * CGFloat(index) / CGFloat(samples.count - 1)
+                    let y = proxy.size.height - (proxy.size.height * CGFloat(sample / maximum))
+                    if index == 0 { path.move(to: CGPoint(x: x, y: y)) }
+                    else { path.addLine(to: CGPoint(x: x, y: y)) }
+                }
+            }
+            .stroke(LinearGradient(colors: [.cyan, .blue], startPoint: .leading, endPoint: .trailing),
+                    style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+        }
     }
 }
 
