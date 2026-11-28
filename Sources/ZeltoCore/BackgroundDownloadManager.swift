@@ -7,6 +7,15 @@ import ActivityKit
 import UserNotifications
 #endif
 
+private struct DownloadSpeedTelemetry {
+    var lastBytes: Int64
+    var lastDate: Date
+    var startedBytes: Int64
+    var startedAt: Date
+    var smoothedSpeed: Double
+    var lastPositiveAt: Date
+}
+
 /// Owns a system-managed background URLSession download queue.
 ///
 /// The host app must forward
@@ -27,6 +36,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
     private var deletingTaskIDs: Set<UUID> = []
     private var downloadOffsets: [UUID: Int64] = [:]
     private var lastLiveActivityUpdates: [UUID: Date] = [:]
+    private var speedTelemetry: [UUID: DownloadSpeedTelemetry] = [:]
     private let updates = BackgroundStoreUpdateQueue()
 
     public init(store: DownloadStore, identifier: String = BackgroundDownloadManager.defaultIdentifier) {
@@ -206,6 +216,34 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         let expected = totalBytesExpectedToWrite > 0
             ? (responseStatus == 206 ? (taskResponseTotal(downloadTask.response) ?? totalBytesExpectedToWrite + effectiveOffset) : totalBytesExpectedToWrite)
             : nil
+        let currentBytes = effectiveOffset + totalBytesWritten
+        let now = Date()
+        lock.withLock {
+            var sample = speedTelemetry[id] ?? DownloadSpeedTelemetry(
+                lastBytes: currentBytes,
+                lastDate: now,
+                startedBytes: effectiveOffset,
+                startedAt: now,
+                smoothedSpeed: 0,
+                lastPositiveAt: now
+            )
+            let elapsed = now.timeIntervalSince(sample.lastDate)
+            if elapsed >= 0.25 {
+                let delta = max(0, currentBytes - sample.lastBytes)
+                let measured = Double(delta) / elapsed
+                if measured > 0 {
+                    sample.smoothedSpeed = sample.smoothedSpeed == 0
+                        ? measured
+                        : sample.smoothedSpeed * 0.65 + measured * 0.35
+                    sample.lastPositiveAt = now
+                } else if now.timeIntervalSince(sample.lastPositiveAt) >= 1.25 {
+                    sample.smoothedSpeed = 0
+                }
+                sample.lastBytes = currentBytes
+                sample.lastDate = now
+            }
+            speedTelemetry[id] = sample
+        }
         updates.enqueue { [weak self, store] in
             _ = try? await store.update(id: id) { task in
                 guard task.status == .downloading else { return }
@@ -424,20 +462,38 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
             ? (task.sourceURL.host ?? "Download")
             : task.sourceURL.lastPathComponent
         let attributes = DownloadActivityAttributes(downloadID: task.id, fileName: fileName)
+        let telemetry = lock.withLock { speedTelemetry[task.id] }
+        let elapsed = telemetry.map { max(0.001, now.timeIntervalSince($0.startedAt)) } ?? 0
+        let averageSpeed = telemetry.map {
+            Double(max(0, task.bytesWritten - $0.startedBytes)) / elapsed
+        } ?? 0
+        let liveSpeed = task.status == .downloading ? (telemetry?.smoothedSpeed ?? 0) : 0
+        let remaining = task.expectedBytes.map { max(0, $0 - task.bytesWritten) }
+        let eta = (remaining ?? 0) > 0 && liveSpeed > 0
+            ? Int(ceil(Double(remaining!) / liveSpeed))
+            : nil
         let state = DownloadActivityAttributes.ContentState(
             progress: task.progress ?? 0,
             bytesWritten: task.bytesWritten,
             expectedBytes: task.expectedBytes,
-            status: statusOverride ?? task.status.rawValue.capitalized
+            status: statusOverride ?? task.status.rawValue.capitalized,
+            speedBytesPerSecond: liveSpeed,
+            averageSpeedBytesPerSecond: averageSpeed > 0 ? averageSpeed : nil,
+            estimatedSecondsRemaining: eta
         )
 
         if let activity = Activity<DownloadActivityAttributes>.activities.first(where: {
             $0.attributes.downloadID == task.id
         }) {
-            if statusOverride != nil || task.status != .downloading {
+            if statusOverride == "Removed" || task.status == .completed || task.status == .failed {
                 await activity.end(using: state, dismissalPolicy: .default)
-                lock.withLock { lastLiveActivityUpdates.removeValue(forKey: task.id) }
+                lock.withLock {
+                    lastLiveActivityUpdates.removeValue(forKey: task.id)
+                    speedTelemetry.removeValue(forKey: task.id)
+                }
             } else {
+                // Keep the Live Activity visible while paused so the user can
+                // still see the saved progress from the Lock Screen.
                 await activity.update(using: state)
             }
         } else if statusOverride == nil && task.status == .downloading {
