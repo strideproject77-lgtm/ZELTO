@@ -29,6 +29,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
     private let identifier: String
     private let lock = NSLock()
     private var session: URLSession!
+    private var parallelDownloads: BackgroundParallelDownloadCoordinator!
     private var backgroundEventsCompletion: (() -> Void)?
     private var fileMoveResults: [UUID: Bool] = [:]
     private var fileResponseResults: [UUID: (statusCode: Int, expectedBytes: Int64?)] = [:]
@@ -49,6 +50,12 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         configuration.isDiscretionary = false
         configuration.waitsForConnectivity = true
         self.session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+        self.parallelDownloads = BackgroundParallelDownloadCoordinator(store: store) { [weak self] id in
+            Task {
+                guard let self, let latest = await store.task(id: id) else { return }
+                await self.syncLiveActivity(for: latest)
+            }
+        }
     }
 
     /// Starts a queued/paused task using iOS-managed background downloading.
@@ -93,6 +100,11 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
             )
         }
 
+        if let parallelTaskIdentifier = try await parallelDownloads.enqueue(task: active) {
+            await syncLiveActivity(for: active, force: true)
+            return parallelTaskIdentifier
+        }
+
         let downloadTask: URLSessionDownloadTask
         if let resumeData = active.resumeData, !resumeData.isEmpty {
             downloadTask = session.downloadTask(withResumeData: resumeData)
@@ -127,6 +139,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
     /// the destination file. Late URLSession callbacks are ignored for this ID.
     public func delete(id: UUID) async throws {
         guard let saved = await store.task(id: id) else { throw DownloadStoreError.taskNotFound }
+        await parallelDownloads.delete(id: id)
         let tasks = await allDownloadTasks()
         if let active = tasks.first(where: { Self.parseTaskDescription($0.taskDescription)?.id == id }) {
             lock.withLock { deletingTaskIDs.insert(id) }
@@ -142,6 +155,13 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
     /// Requests a cooperative pause. iOS may provide opaque resume data; if it
     /// does not, the next enqueue safely restarts using a fresh request.
     public func pause(id: UUID) async throws {
+        if await parallelDownloads.hasActiveTask(id: id) {
+            await parallelDownloads.pause(id: id)
+            if let latest = await store.task(id: id) {
+                await syncLiveActivity(for: latest, force: true)
+            }
+            return
+        }
         let tasks = await allDownloadTasks()
         guard let task = tasks.first(where: { Self.parseTaskDescription($0.taskDescription)?.id == id }) else {
             _ = try await store.update(id: id) { value in
@@ -178,6 +198,10 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         identifier: String,
         completionHandler: @escaping () -> Void
     ) {
+        if identifier == BackgroundParallelDownloadCoordinator.defaultIdentifier {
+            parallelDownloads.handleEvents(identifier: identifier, completionHandler: completionHandler)
+            return
+        }
         guard identifier == self.identifier else {
             completionHandler()
             return
@@ -190,6 +214,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
     /// Reconciles persisted in-flight tasks with tasks still owned by the
     /// background transfer daemon after an app relaunch.
     public func reconcileAfterRelaunch() async {
+        await parallelDownloads.reconcileAfterRelaunch()
         let activeTasks = await allDownloadTasks()
         let activeIDs = Set(activeTasks.compactMap {
             Self.parseTaskDescription($0.taskDescription)?.id
