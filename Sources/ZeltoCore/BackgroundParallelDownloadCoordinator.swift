@@ -270,19 +270,23 @@ public final class BackgroundParallelDownloadCoordinator: NSObject, URLSessionDo
                 responseResults[downloadTask.taskIdentifier] = (status: 206, valid: true)
             }
             let bytes = durableByteCount(manifest: manifest)
+            let manifestTotalBytes = manifest.totalBytes
+            let manifestETag = manifest.etag
+            let manifestLastModified = manifest.lastModified
+            let manifestIsComplete = manifest.completed.count == manifest.ranges.count
             let store = self.store
             updates.enqueue {
                 _ = try? await store.update(id: metadata.taskID) { value in
                     guard value.status == .downloading else { return }
                     value.bytesWritten = bytes
-                    value.expectedBytes = manifest.totalBytes
-                    value.etag = manifest.etag
-                    value.lastModified = manifest.lastModified
+                    value.expectedBytes = manifestTotalBytes
+                    value.etag = manifestETag
+                    value.lastModified = manifestLastModified
                 }
                 self.onProgress?(metadata.taskID)
             }
 
-            if manifest.completed.count == manifest.ranges.count,
+            if manifestIsComplete,
                !lock.withLock({ mergingIDs.contains(metadata.taskID) || pausingIDs.contains(metadata.taskID) }) {
                 lock.withLock { mergingIDs.insert(metadata.taskID) }
                 let destination = URL(fileURLWithPath: metadata.destinationPath)
