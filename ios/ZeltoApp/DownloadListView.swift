@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 import ZeltoCore
 
 struct DownloadListView: View {
@@ -304,6 +305,11 @@ struct DownloadListView: View {
         }
         isAdding = true
         defer { isAdding = false }
+        let notificationCenter = UNUserNotificationCenter.current()
+        let notificationSettings = await notificationCenter.notificationSettings()
+        if notificationSettings.authorizationStatus == .notDetermined {
+            _ = try? await notificationCenter.requestAuthorization(options: [.alert, .sound, .badge])
+        }
         do {
             let rawURL = sourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let url = URL(string: rawURL),
