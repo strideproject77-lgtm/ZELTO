@@ -16,6 +16,7 @@ struct DownloadListView: View {
     @State private var liveSpeeds: [UUID: Double] = [:]
     @State private var peakSpeeds: [UUID: Double] = [:]
     @State private var speedHistory: [UUID: [Double]] = [:]
+    @State private var lastByteProgressAt: [UUID: Date] = [:]
 
     private struct SpeedSample {
         let bytes: Int64
@@ -227,24 +228,30 @@ struct DownloadListView: View {
         let now = Date()
         for task in updated where task.status == .downloading {
             var samples = speedSamples[task.id] ?? []
+            let previous = samples.last
+            if let previous, task.bytesWritten > previous.bytes {
+                lastByteProgressAt[task.id] = now
+            } else if lastByteProgressAt[task.id] == nil {
+                lastByteProgressAt[task.id] = now
+            }
             samples.append(SpeedSample(bytes: task.bytesWritten, date: now))
-            samples = samples.filter { now.timeIntervalSince($0.date) <= 2.0 }
+            samples = samples.filter { now.timeIntervalSince($0.date) <= 3.0 }
 
-            // Measure over a rolling window instead of a single 250 ms slice.
-            // This prevents tiny callback bursts from making the speed jump wildly.
-            if let baseline = samples.first(where: { now.timeIntervalSince($0.date) >= 0.9 }) {
+            // Use a rolling measurement window; ignore short zero-byte gaps
+            // between URLSession callbacks, but settle to zero when truly idle.
+            if let baseline = samples.first(where: { now.timeIntervalSince($0.date) >= 1.0 }) {
                 let elapsed = now.timeIntervalSince(baseline.date)
                 if elapsed > 0 {
                     let delta = max(0, task.bytesWritten - baseline.bytes)
                     let measured = Double(delta) / elapsed
-                    let previousSpeed = liveSpeeds[task.id] ?? measured
-                    // Smooth the one-second rolling rate while still reacting quickly.
-                    let stableSpeed = previousSpeed == 0
-                        ? measured
-                        : previousSpeed * 0.45 + measured * 0.55
-                    liveSpeeds[task.id] = stableSpeed
                     if measured > 0 {
+                        let previousSpeed = liveSpeeds[task.id] ?? measured
+                        liveSpeeds[task.id] = previousSpeed == 0
+                            ? measured
+                            : previousSpeed * 0.35 + measured * 0.65
                         peakSpeeds[task.id] = max(peakSpeeds[task.id] ?? 0, measured)
+                    } else if now.timeIntervalSince(lastByteProgressAt[task.id] ?? now) >= 1.5 {
+                        liveSpeeds[task.id] = 0
                     }
                     var history = speedHistory[task.id] ?? []
                     history.append(measured)
@@ -259,6 +266,7 @@ struct DownloadListView: View {
         speedSamples = speedSamples.filter { activeIDs.contains($0.key) }
         peakSpeeds = peakSpeeds.filter { activeIDs.contains($0.key) }
         speedHistory = speedHistory.filter { activeIDs.contains($0.key) }
+        lastByteProgressAt = lastByteProgressAt.filter { activeIDs.contains($0.key) }
         tasks = updated
     }
 
@@ -284,6 +292,7 @@ struct DownloadListView: View {
             speedSamples[id] = nil
             peakSpeeds[id] = nil
             speedHistory[id] = nil
+            lastByteProgressAt[id] = nil
             await reloadTasks()
         } catch { errorMessage = error.localizedDescription }
     }
