@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
     paths:
+      - "Package.swift"
+      - "Sources/**"
+      - "scripts/**"
+      - ".github/workflows/ipa-builder.yml"
       - "ios/**/*.xcodeproj/**"
       - "ios/**/*.xcworkspace/**"
       - "ios/project.yml"
