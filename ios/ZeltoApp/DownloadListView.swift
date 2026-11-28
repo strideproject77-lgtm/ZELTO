@@ -88,7 +88,7 @@ struct DownloadListView: View {
             .task {
                 await reloadTasks()
                 while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(1))
+                    try? await Task.sleep(for: .milliseconds(250))
                     await reloadTasks()
                 }
             }
@@ -222,9 +222,11 @@ struct DownloadListView: View {
         for task in updated where task.status == .downloading {
             if let previous = speedSamples[task.id] {
                 let elapsed = now.timeIntervalSince(previous.date)
-                if elapsed >= 0.5 {
+                if elapsed >= 0.35 {
                     let delta = max(0, task.bytesWritten - previous.bytes)
-                    liveSpeeds[task.id] = Double(delta) / elapsed
+                    let measured = Double(delta) / elapsed
+                    let previousSpeed = liveSpeeds[task.id] ?? measured
+                    liveSpeeds[task.id] = previousSpeed * 0.35 + measured * 0.65
                     speedSamples[task.id] = SpeedSample(bytes: task.bytesWritten, date: now)
                 }
             } else {
@@ -284,11 +286,11 @@ struct DownloadListView: View {
             // URL and reuse its saved bytes only when size plus a stable validator
             // prove that it is the same representation.
             let savedTasks = await store.allTasks()
-            if let candidate = savedTasks.first(where: {
-                ($0.status == .paused || $0.status == .failed) &&
-                $0.bytesWritten > 0 && $0.expectedBytes != nil
-            }), let identity = try? await DownloadLinkInspector.inspect(url),
-               identity.safelyMatches(candidate) {
+            if let identity = try? await DownloadLinkInspector.inspect(url),
+               let candidate = savedTasks.first(where: {
+                   ($0.status == .paused || $0.status == .failed) &&
+                   identity.safelyMatches($0)
+               }) {
                 _ = try await store.update(id: candidate.id) { value in
                     try value.replaceExpiredLink(with: url, identity: identity)
                 }

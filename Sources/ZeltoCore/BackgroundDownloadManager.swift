@@ -231,6 +231,21 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         }
         fileResponseResults[metadata.id] = (statusCode: statusCode, expectedBytes: responseExpectedBytes)
 
+        if statusCode == 206,
+           let requestedValidator = downloadTask.originalRequest?.value(forHTTPHeaderField: "If-Range") {
+            let responseValidators = [
+                response.value(forHTTPHeaderField: "ETag"),
+                response.value(forHTTPHeaderField: "Last-Modified")
+            ].compactMap { $0 }
+            guard responseValidators.contains(requestedValidator) else {
+                fileMoveResults[metadata.id] = false
+                fileResponseResults[metadata.id] = (statusCode: 0, expectedBytes: responseExpectedBytes)
+                lock.unlock()
+                try? FileManager.default.removeItem(at: location)
+                return
+            }
+        }
+
         // URLSessionDownloadTask can finish without a transport error even when
         // the server returned an HTTP error page (for example, a 9-byte 404).
         // Never move an error response into the user's Downloads folder.
