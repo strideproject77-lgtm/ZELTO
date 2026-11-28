@@ -101,7 +101,9 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         }
 
         if let parallelTaskIdentifier = try await parallelDownloads.enqueue(task: active) {
-            await syncLiveActivity(for: active, force: true)
+            if let latest = await store.task(id: id) {
+                await syncLiveActivity(for: latest, force: true)
+            }
             return parallelTaskIdentifier
         }
 
