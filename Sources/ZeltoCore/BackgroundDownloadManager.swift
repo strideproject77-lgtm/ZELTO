@@ -180,7 +180,8 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
 
     public func urlSession(_ session: URLSession, task: URLSessionTask,
                            didCompleteWithError error: Error?) {
-        guard let id = Self.parseTaskDescription(task.taskDescription)?.id else { return }
+        guard let metadata = Self.parseTaskDescription(task.taskDescription) else { return }
+        let id = metadata.id
         lock.lock()
         let wasPausing = pausingTaskIDs.contains(id)
         let wasDeleting = deletingTaskIDs.remove(id) != nil
