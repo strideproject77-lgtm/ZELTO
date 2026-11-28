@@ -115,4 +115,27 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertEqual(DownloadDestination.sanitizedFilename("...   "), "download")
     }
 
+    func testCompletionUsesActualSizeWhenServerLengthIsUnknown() throws {
+        var task = try DownloadTask(sourceURL: URL(string: "https://example.com/stream")!,
+                                    destinationPath: "/tmp/stream")
+        try task.start()
+        try task.complete(actualBytes: 987)
+        XCTAssertEqual(task.status, .completed)
+        XCTAssertEqual(task.bytesWritten, 987)
+        XCTAssertEqual(task.expectedBytes, 987)
+        XCTAssertEqual(task.progress, 1)
+    }
+
+    func testCompletionRejectsFinalSizeMismatch() throws {
+        var task = try DownloadTask(sourceURL: URL(string: "https://example.com/file")!,
+                                    destinationPath: "/tmp/file",
+                                    expectedBytes: 100)
+        try task.start()
+        XCTAssertThrowsError(try task.complete(actualBytes: 99)) { error in
+            XCTAssertEqual(error as? DownloadTaskError,
+                           .finalByteCountMismatch(expected: 100, actual: 99))
+        }
+        XCTAssertEqual(task.status, .downloading)
+    }
+
 }
