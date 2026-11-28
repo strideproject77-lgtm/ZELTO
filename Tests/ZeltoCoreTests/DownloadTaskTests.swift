@@ -155,8 +155,10 @@ final class DownloadTaskTests: XCTestCase {
         try encoder.encode([older, newer]).write(to: metadata)
 
         let store = try DownloadStore(fileURL: metadata)
-        XCTAssertEqual(await store.allTasks().count, 1)
-        XCTAssertEqual(await store.task(id: id)?.bytesWritten, 20)
+        let allTasks = await store.allTasks()
+        let restored = await store.task(id: id)
+        XCTAssertEqual(allTasks.count, 1)
+        XCTAssertEqual(restored?.bytesWritten, 20)
     }
 
 }
