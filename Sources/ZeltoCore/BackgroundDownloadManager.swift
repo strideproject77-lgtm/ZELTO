@@ -246,7 +246,8 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
                     if let message = HTTPDownloadResponseValidator.failureMessage(
                         statusCode: responseResult?.statusCode ?? 200,
                         expectedBytes: expected,
-                        actualBytes: size
+                        actualBytes: size,
+                        fileURL: URL(fileURLWithPath: metadata.destinationPath)
                     ) {
                         try value.markFailed(message: message)
                         try? FileManager.default.removeItem(atPath: metadata.destinationPath)
