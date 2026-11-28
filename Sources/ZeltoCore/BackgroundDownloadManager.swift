@@ -37,6 +37,24 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
     /// Existing URLSession resume data is preferred when available.
     @discardableResult
     public func enqueue(id: UUID) async throws -> Int {
+        // Reuse a transfer already owned by the background daemon. This avoids
+        // creating duplicate downloads when the UI is opened before relaunch
+        // reconciliation has finished.
+        let existingTasks = await allDownloadTasks()
+        if let existing = existingTasks.first(where: {
+            Self.parseTaskDescription($0.taskDescription)?.id == id
+        }) {
+            if let saved = await store.task(id: id),
+               saved.status == .paused || saved.status == .queued {
+                _ = try? await store.update(id: id) { value in
+                    if value.status == .paused || value.status == .queued {
+                        try value.start()
+                    }
+                }
+            }
+            return existing.taskIdentifier
+        }
+
         guard let saved = await store.task(id: id) else { throw DownloadStoreError.taskNotFound }
         if saved.status == .failed {
             _ = try await store.update(id: id) { try $0.retry() }
