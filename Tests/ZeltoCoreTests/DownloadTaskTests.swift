@@ -138,4 +138,25 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertEqual(task.status, .downloading)
     }
 
+    func testStoreKeepsNewestSnapshotWhenPersistedIDsAreDuplicated() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let metadata = directory.appendingPathComponent("downloads.json")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let id = UUID()
+        let source = URL(string: "https://example.com/duplicate")!
+        let older = try DownloadTask(id: id, sourceURL: source, destinationPath: "/tmp/duplicate",
+                                     bytesWritten: 10, updatedAt: Date(timeIntervalSince1970: 100))
+        let newer = try DownloadTask(id: id, sourceURL: source, destinationPath: "/tmp/duplicate",
+                                     bytesWritten: 20, updatedAt: Date(timeIntervalSince1970: 200))
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode([older, newer]).write(to: metadata)
+
+        let store = try DownloadStore(fileURL: metadata)
+        XCTAssertEqual(await store.allTasks().count, 1)
+        XCTAssertEqual(await store.task(id: id)?.bytesWritten, 20)
+    }
+
 }
