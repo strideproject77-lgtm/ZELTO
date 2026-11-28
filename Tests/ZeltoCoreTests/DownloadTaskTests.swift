@@ -104,10 +104,10 @@ final class DownloadTaskTests: XCTestCase {
     }
 
     func testDownloadFilenameSanitizationBlocksPathAndControlCharacters() {
-        let sanitized = DownloadDestination.sanitizedFilename("../folder\\\\movie.mp4\\n")
+        let sanitized = DownloadDestination.sanitizedFilename("../folder\\movie.mp4\n")
         XCTAssertFalse(sanitized.contains("/"))
-        XCTAssertFalse(sanitized.contains("\\\\"))
-        XCTAssertFalse(sanitized.contains("\\n"))
+        XCTAssertFalse(sanitized.contains("\\"))
+        XCTAssertFalse(sanitized.contains("\n"))
         XCTAssertTrue(sanitized.hasSuffix("movie.mp4"))
     }
 
