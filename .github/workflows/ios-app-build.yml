@@ -16,6 +16,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Run core download tests
+        run: swift test
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project
