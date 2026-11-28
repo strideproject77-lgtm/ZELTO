@@ -19,6 +19,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
     private var fileResponseResults: [UUID: (statusCode: Int, expectedBytes: Int64?)] = [:]
     private var pausingTaskIDs: Set<UUID> = []
     private var deletingTaskIDs: Set<UUID> = []
+    private var downloadOffsets: [UUID: Int64] = [:]
     private let updates = BackgroundStoreUpdateQueue()
 
     public init(store: DownloadStore, identifier: String = BackgroundDownloadManager.defaultIdentifier) {
@@ -64,8 +65,26 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         let downloadTask: URLSessionDownloadTask
         if let resumeData = active.resumeData, !resumeData.isEmpty {
             downloadTask = session.downloadTask(withResumeData: resumeData)
+            lock.withLock { downloadOffsets[id] = active.bytesWritten }
         } else {
-            downloadTask = session.downloadTask(with: active.sourceURL)
+            let destination = URL(fileURLWithPath: active.destinationPath)
+            let attributes = try? FileManager.default.attributesOfItem(atPath: destination.path)
+            var offset = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+            let validator = active.etag ?? active.lastModified
+            if offset > 0, validator == nil {
+                // Never append an unverified partial file.
+                try? FileManager.default.removeItem(at: destination)
+                offset = 0
+            }
+            var request = URLRequest(url: active.sourceURL)
+            request.httpMethod = "GET"
+            request.timeoutInterval = 60
+            if offset > 0, let validator {
+                request.setValue("bytes=\(offset)-", forHTTPHeaderField: "Range")
+                request.setValue(validator, forHTTPHeaderField: "If-Range")
+            }
+            lock.withLock { downloadOffsets[id] = offset }
+            downloadTask = session.downloadTask(with: request)
         }
         downloadTask.taskDescription = Self.makeTaskDescription(id: id, destinationPath: active.destinationPath)
         downloadTask.resume()
@@ -158,11 +177,22 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
                            totalBytesExpectedToWrite: Int64) {
         guard let id = Self.parseTaskDescription(downloadTask.taskDescription)?.id else { return }
         if lock.withLock({ deletingTaskIDs.contains(id) }) { return }
-        let expected = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : nil
+        let responseStatus = (downloadTask.response as? HTTPURLResponse)?.statusCode
+        let offset = lock.withLock { downloadOffsets[id] ?? 0 }
+        let effectiveOffset = responseStatus == 200 ? 0 : offset
+        let expected = totalBytesExpectedToWrite > 0
+            ? (responseStatus == 206 ? (taskResponseTotal(downloadTask.response) ?? totalBytesExpectedToWrite + effectiveOffset) : totalBytesExpectedToWrite)
+            : nil
         updates.enqueue { [store] in
             _ = try? await store.update(id: id) { task in
                 guard task.status == .downloading else { return }
-                try task.recordProgress(bytesWritten: max(task.bytesWritten, totalBytesWritten),
+                if responseStatus == 200 && task.bytesWritten > 0 {
+                    task.bytesWritten = 0
+                    task.etag = nil
+                    task.lastModified = nil
+                    task.resumeData = nil
+                }
+                try task.recordProgress(bytesWritten: max(task.bytesWritten, effectiveOffset + totalBytesWritten),
                                         expectedBytes: expected)
             }
         }
@@ -216,10 +246,29 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         do {
             try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(),
                                                     withIntermediateDirectories: true)
-            if FileManager.default.fileExists(atPath: destination.path) {
-                try FileManager.default.removeItem(at: destination)
+            if statusCode == 206 {
+                let expectedStart = Self.contentRangeStart(response.value(forHTTPHeaderField: "Content-Range") ?? "")
+                let existingSize = ((try? FileManager.default.attributesOfItem(atPath: destination.path))?[.size] as? NSNumber)?.int64Value ?? 0
+                guard let expectedStart, expectedStart == existingSize else {
+                    throw HTTPDownloadError.invalidContentRange
+                }
+                if !FileManager.default.fileExists(atPath: destination.path) {
+                    _ = FileManager.default.createFile(atPath: destination.path, contents: nil)
+                }
+                let output = try FileHandle(forWritingTo: destination)
+                let input = try FileHandle(forReadingFrom: location)
+                defer { try? output.close(); try? input.close() }
+                try output.seekToEnd()
+                while let chunk = try input.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+                    try output.write(contentsOf: chunk)
+                }
+                try FileManager.default.removeItem(at: location)
+            } else {
+                if FileManager.default.fileExists(atPath: destination.path) {
+                    try FileManager.default.removeItem(at: destination)
+                }
+                try FileManager.default.moveItem(at: location, to: destination)
             }
-            try FileManager.default.moveItem(at: location, to: destination)
             moved = true
         } catch {
             moved = false
@@ -237,6 +286,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         let wasDeleting = deletingTaskIDs.remove(id) != nil
         let fileMoved = fileMoveResults.removeValue(forKey: id) ?? false
         let responseResult = fileResponseResults.removeValue(forKey: id)
+        downloadOffsets.removeValue(forKey: id)
         lock.unlock()
 
         if wasDeleting || wasPausing { return }
@@ -297,6 +347,21 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         let pieces = value.split(separator: "/", maxSplits: 1)
         guard pieces.count == 2, pieces[1] != "*" else { return nil }
         return Int64(pieces[1])
+    }
+
+    private static func contentRangeStart(_ value: String) -> Int64? {
+        let pieces = value.split(separator: " ", maxSplits: 1)
+        guard pieces.count == 2, pieces[0].lowercased() == "bytes" else { return nil }
+        let bounds = pieces[1].split(separator: "/", maxSplits: 1).first?
+            .split(separator: "-", maxSplits: 1)
+        guard let first = bounds?.first else { return nil }
+        return Int64(first)
+    }
+
+    private func taskResponseTotal(_ response: URLResponse?) -> Int64? {
+        guard let http = response as? HTTPURLResponse,
+              let range = http.value(forHTTPHeaderField: "Content-Range") else { return nil }
+        return Self.contentRangeTotal(range)
     }
 
     private static func makeTaskDescription(id: UUID, destinationPath: String) -> String {

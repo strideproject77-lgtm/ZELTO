@@ -61,3 +61,54 @@ final class HTTPDownloadClientTests: XCTestCase {
         XCTAssertNil(fresh.value(forHTTPHeaderField: "Range"))
     }
 }
+
+
+final class DownloadLinkIdentityTests: XCTestCase {
+    func testSameStrongETagAndSizeAllowsExpiredURLReplacement() throws {
+        var task = try DownloadTask(
+            sourceURL: URL(string: "https://old.example.com/file.zip?token=expired")!,
+            destinationPath: "/tmp/file.zip",
+            status: .paused,
+            bytesWritten: 4096,
+            expectedBytes: 100_000,
+            etag: "\"stable-v1\""
+        )
+        let identity = DownloadLinkIdentity(contentLength: 100_000, etag: "\"stable-v1\"",
+                                            lastModified: nil, fileName: "file.zip")
+        XCTAssertTrue(identity.safelyMatches(task))
+        try task.replaceExpiredLink(with: URL(string: "https://new.example.com/file.zip?token=fresh")!,
+                                    identity: identity)
+        XCTAssertEqual(task.sourceURL.host, "new.example.com")
+        XCTAssertEqual(task.bytesWritten, 4096)
+        XCTAssertNil(task.resumeData)
+        XCTAssertEqual(task.status, .paused)
+    }
+
+    func testDifferentETagNeverReusesOldPartialBytes() throws {
+        let task = try DownloadTask(
+            sourceURL: URL(string: "https://old.example.com/file.zip")!,
+            destinationPath: "/tmp/file.zip",
+            status: .paused,
+            bytesWritten: 4096,
+            expectedBytes: 100_000,
+            etag: "\"version-1\""
+        )
+        let changed = DownloadLinkIdentity(contentLength: 100_000, etag: "\"version-2\"",
+                                            lastModified: nil, fileName: "file.zip")
+        XCTAssertFalse(changed.safelyMatches(task))
+    }
+
+    func testDifferentSizeNeverReusesOldPartialBytes() throws {
+        let task = try DownloadTask(
+            sourceURL: URL(string: "https://old.example.com/file.zip")!,
+            destinationPath: "/tmp/file.zip",
+            status: .paused,
+            bytesWritten: 4096,
+            expectedBytes: 100_000,
+            etag: "\"same\""
+        )
+        let changed = DownloadLinkIdentity(contentLength: 100_001, etag: "\"same\"",
+                                            lastModified: nil, fileName: "file.zip")
+        XCTAssertFalse(changed.safelyMatches(task))
+    }
+}

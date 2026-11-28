@@ -280,6 +280,24 @@ struct DownloadListView: View {
                   ["http", "https"].contains(scheme), url.host != nil else {
                 throw DownloadTaskError.invalidSourceURL
             }
+            // If a previous partial transfer expired, inspect the replacement
+            // URL and reuse its saved bytes only when size plus a stable validator
+            // prove that it is the same representation.
+            let savedTasks = await store.allTasks()
+            if let candidate = savedTasks.first(where: {
+                ($0.status == .paused || $0.status == .failed) &&
+                $0.bytesWritten > 0 && $0.expectedBytes != nil
+            }), let identity = try? await DownloadLinkInspector.inspect(url),
+               identity.safelyMatches(candidate) {
+                _ = try await store.update(id: candidate.id) { value in
+                    try value.replaceExpiredLink(with: url, identity: identity)
+                }
+                _ = try await manager.enqueue(id: candidate.id)
+                sourceURL = ""
+                await reloadTasks()
+                return
+            }
+
             let support = try FileManager.default.url(for: .applicationSupportDirectory,
                                                       in: .userDomainMask, appropriateFor: nil, create: true)
             let folder = support.appendingPathComponent("Downloads", isDirectory: true)
