@@ -16,6 +16,8 @@ Zelto is a cross-platform download manager project, beginning with iOS.
 - **iOS app:** `ios/project.yml` defines the XcodeGen app project; GitHub Actions has successfully generated the project and built the iOS Simulator target.
 - **iOS IPA:** GitHub Actions and Codemagic generate the Xcode project from `ios/project.yml` and run the shared unsigned IPA archive script.
 - **Codemagic log receiver:** configure environment group `zelto-github-logs` with `ZELTO_LOGS_GITHUB_TOKEN`, a fine-grained token with Contents read/write access to this repository. Latest logs are split into parts no larger than 4 MiB and published under `latest/` on `codemagic-logs`.
+- **Codemagic IPA artifact:** each successful IPA build packages `Zelto.ipa` and `BUILD-INFO.txt` into `Zelto-IPA-Artifact.zip`; Codemagic uploads the ZIP instead of a separate raw IPA artifact. The IPA inside remains unsigned and must be re-signed before installation.
+- **Latest verified Codemagic run:** build `6b0aa0f29491bc104972ae0c` on `main` completed with exit code 0 and `ARCHIVE SUCCEEDED`; its logs were received on `codemagic-logs`. ZIP packaging was added afterward and will be verified by the next Codemagic run.
 
 The IPA builder creates an unsigned IPA; signing and installation validation are separate steps.
 
