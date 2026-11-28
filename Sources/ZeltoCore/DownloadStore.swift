@@ -13,7 +13,15 @@ public actor DownloadStore {
         if FileManager.default.fileExists(atPath: fileURL.path) {
             let data = try Data(contentsOf: fileURL)
             let decoded = try JSONDecoder.zelto.decode([DownloadTask].self, from: data)
-            loaded = Dictionary(uniqueKeysWithValues: decoded.map { ($0.id, $0) })
+            loaded = [:]
+            for task in decoded {
+                if let existing = loaded[task.id], existing.updatedAt > task.updatedAt {
+                    continue
+                }
+                // Prefer the newest durable snapshot if an older file contains
+                // duplicate IDs instead of crashing during dictionary creation.
+                loaded[task.id] = task
+            }
         } else {
             loaded = [:]
         }
