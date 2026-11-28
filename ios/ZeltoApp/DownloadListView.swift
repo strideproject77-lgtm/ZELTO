@@ -34,6 +34,12 @@ struct DownloadListView: View {
                             }
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            if let failure = task.failureMessage {
+                                Text(failure)
+                                    .font(.caption2)
+                                    .foregroundStyle(.red)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                         .padding(.vertical, 4)
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -49,6 +55,11 @@ struct DownloadListView: View {
                                 } label: {
                                     Label("Resume", systemImage: "play.fill")
                                 }.tint(.green)
+                            }
+                            Button(role: .destructive) {
+                                Task { await deleteDownload(task.id) }
+                            } label: {
+                                Label("Delete", systemImage: "trash")
                             }
                         }
                     }
@@ -122,6 +133,16 @@ struct DownloadListView: View {
     private func pauseDownload(_ id: UUID) async {
         do {
             try await appDelegate?.backgroundDownloads?.pause(id: id)
+            await reloadTasks()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func deleteDownload(_ id: UUID) async {
+        do {
+            try await appDelegate?.backgroundDownloads?.delete(id: id)
             await reloadTasks()
         } catch {
             errorMessage = error.localizedDescription
