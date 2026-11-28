@@ -192,6 +192,9 @@ public final class BackgroundParallelDownloadCoordinator: NSObject, URLSessionDo
         let active = await allTasks()
         let ids = Set(active.compactMap { Self.metadata(from: $0.taskDescription)?.taskID })
         for id in ids {
+            _ = try? await store.update(id: id) { value in
+                if value.status == .paused { try value.start() }
+            }
             if let task = await store.task(id: id) { onProgress?(task.id) }
         }
     }
@@ -231,6 +234,10 @@ public final class BackgroundParallelDownloadCoordinator: NSObject, URLSessionDo
     public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                            didFinishDownloadingTo location: URL) {
         guard let metadata = Self.metadata(from: downloadTask.taskDescription) else { return }
+        if lock.withLock({ deletingIDs.contains(metadata.taskID) }) {
+            try? FileManager.default.removeItem(at: location)
+            return
+        }
         let directory = URL(fileURLWithPath: metadata.directoryPath, isDirectory: true)
         let part = segmentURL(metadata.index, directory: directory)
         guard let response = downloadTask.response as? HTTPURLResponse,
@@ -276,7 +283,7 @@ public final class BackgroundParallelDownloadCoordinator: NSObject, URLSessionDo
             }
 
             if manifest.completed.count == manifest.ranges.count,
-               !lock.withLock({ mergingIDs.contains(metadata.taskID) }) {
+               !lock.withLock({ mergingIDs.contains(metadata.taskID) || pausingIDs.contains(metadata.taskID) }) {
                 lock.withLock { mergingIDs.insert(metadata.taskID) }
                 let destination = URL(fileURLWithPath: metadata.destinationPath)
                 do {
