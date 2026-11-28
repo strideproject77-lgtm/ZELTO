@@ -27,8 +27,8 @@ jobs:
     timeout-minutes: 120
     env:
       ZELTO_SCHEME: Zelto
-      ZELTO_BUILD_DIR: ${{ runner.temp }}/zelto-build
-      ZELTO_ARCHIVE_LOG: ${{ runner.temp }}/xcodebuild-archive.log
+      ZELTO_BUILD_DIR: /tmp/zelto-build
+      ZELTO_ARCHIVE_LOG: /tmp/xcodebuild-archive.log
     steps:
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
