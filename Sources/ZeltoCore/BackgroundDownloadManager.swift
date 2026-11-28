@@ -177,7 +177,13 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
                         try value.markFailed(message: "Downloaded file size could not be verified.")
                         return
                     }
-                    try value.complete(actualBytes: size)
+                    do {
+                        try value.complete(actualBytes: size)
+                    } catch {
+                        value.status = .failed
+                        value.failureMessage = "Downloaded file size did not match the server's expected size."
+                        value.updatedAt = Date()
+                    }
                 } else {
                     try value.markFailed(message: "iOS background download completed but its temporary file could not be moved.")
                 }
