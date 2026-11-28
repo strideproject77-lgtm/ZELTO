@@ -91,4 +91,28 @@ final class DownloadTaskTests: XCTestCase {
         XCTAssertNil(recovered?.etag)
         XCTAssertFalse(FileManager.default.fileExists(atPath: partial.path))
     }
+    func testDownloadDestinationsAreUniqueForSameFilename() {
+        let directory = FileManager.default.temporaryDirectory
+        let firstID = UUID()
+        let secondID = UUID()
+        let first = DownloadDestination.fileURL(in: directory, suggestedName: "movie.mp4", taskID: firstID)
+        let second = DownloadDestination.fileURL(in: directory, suggestedName: "movie.mp4", taskID: secondID)
+
+        XCTAssertNotEqual(first, second)
+        XCTAssertTrue(first.lastPathComponent.hasSuffix("-movie.mp4"))
+        XCTAssertTrue(second.lastPathComponent.hasSuffix("-movie.mp4"))
+    }
+
+    func testDownloadFilenameSanitizationBlocksPathAndControlCharacters() {
+        let sanitized = DownloadDestination.sanitizedFilename("../folder\\\\movie.mp4\\n")
+        XCTAssertFalse(sanitized.contains("/"))
+        XCTAssertFalse(sanitized.contains("\\\\"))
+        XCTAssertFalse(sanitized.contains("\\n"))
+        XCTAssertTrue(sanitized.hasSuffix("movie.mp4"))
+    }
+
+    func testEmptyDownloadFilenameUsesSafeFallback() {
+        XCTAssertEqual(DownloadDestination.sanitizedFilename("...   "), "download")
+    }
+
 }
