@@ -353,12 +353,14 @@ private final class ParallelManifestState: @unchecked Sendable {
             let bytes = manifest.ranges
                 .filter { manifest.completedSegmentIndexes.contains($0.index) }
                 .reduce(Int64(0)) { $0 + $1.byteCount }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            if let data = try? encoder.encode(manifest) {
+                // Keep manifest writes in the same critical section as mutation:
+                // concurrent segment completions must never overwrite a newer snapshot.
+                try? data.write(to: manifestURL, options: .atomic)
+            }
             return (manifest, bytes)
-        }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        if let data = try? encoder.encode(snapshot.0) {
-            try? data.write(to: manifestURL, options: .atomic)
         }
         progress?(ParallelDownloadProgress(bytesWritten: snapshot.1,
                                            expectedBytes: snapshot.0.totalBytes,
