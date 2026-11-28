@@ -1,0 +1,35 @@
+{
+  "provider": "Codemagic",
+  "repository": "strideproject77-lgtm/ZELTO",
+  "branch": "main",
+  "commit": "5261ee50c02a34d42cfb8a5a755da8be49c24d71",
+  "build_id": "6b0aa6eb9491bc104972afda",
+  "build_number": "unknown",
+  "xcode": "26.2",
+  "exit_code": 0,
+  "result": "success",
+  "uploaded_at_utc": "2026-11-28T10:04:21.040474+00:00",
+  "logs": {
+    "build.log": {
+      "bytes": 238313,
+      "lines": 2412,
+      "sha256": "8915253ccfd52bd66b732a01c4e911dc3ca373148cde893fcbb1f625225ee547"
+    },
+    "xcodebuild-archive.log": {
+      "bytes": 127789,
+      "lines": 515,
+      "sha256": "fa212a926962b87305cdf24244081296a946a150c56a4209158ae33f627c4309"
+    },
+    "runner-setup.log": {
+      "bytes": 165,
+      "lines": 7,
+      "sha256": "0951e72a4bc1045fa7d6b41b265fc6e521979bbba1844bfb7f624297e1739ac0"
+    }
+  },
+  "max_part_bytes": 4194304,
+  "parts": [
+    "latest/build.log",
+    "latest/xcodebuild-archive.log",
+    "latest/runner-setup.log"
+  ]
+}
