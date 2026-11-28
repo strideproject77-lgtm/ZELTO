@@ -1,5 +1,11 @@
 #if os(iOS)
 import Foundation
+#if canImport(ActivityKit)
+import ActivityKit
+#endif
+#if canImport(UserNotifications)
+import UserNotifications
+#endif
 
 /// Owns a system-managed background URLSession download queue.
 ///
@@ -20,6 +26,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
     private var pausingTaskIDs: Set<UUID> = []
     private var deletingTaskIDs: Set<UUID> = []
     private var downloadOffsets: [UUID: Int64] = [:]
+    private var lastLiveActivityUpdates: [UUID: Date] = [:]
     private let updates = BackgroundStoreUpdateQueue()
 
     public init(store: DownloadStore, identifier: String = BackgroundDownloadManager.defaultIdentifier) {
@@ -52,6 +59,9 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
                         try value.start()
                     }
                 }
+            }
+            if let latest = await store.task(id: id) {
+                await syncLiveActivity(for: latest, force: true)
             }
             return existing.taskIdentifier
         }
@@ -88,6 +98,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         }
         downloadTask.taskDescription = Self.makeTaskDescription(id: id, destinationPath: active.destinationPath)
         downloadTask.resume()
+        await syncLiveActivity(for: active, force: true)
         return downloadTask.taskIdentifier
     }
 
@@ -100,6 +111,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
             lock.withLock { deletingTaskIDs.insert(id) }
             active.cancel()
         }
+        await syncLiveActivity(for: saved, statusOverride: "Removed", force: true)
         try await store.remove(id: id)
         if FileManager.default.fileExists(atPath: saved.destinationPath) {
             try FileManager.default.removeItem(atPath: saved.destinationPath)
@@ -124,6 +136,9 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
                 Task {
                     _ = try? await self.store.update(id: id) { value in
                         if value.status == .downloading { try value.pause(resumeData: resumeData) }
+                    }
+                    if let latest = await self.store.task(id: id) {
+                        await self.syncLiveActivity(for: latest, force: true)
                     }
                     self.lock.withLock { self.pausingTaskIDs.remove(id) }
                     continuation.resume()
@@ -162,6 +177,11 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
                 if value.status == .paused { try value.start() }
             }
         }
+        for id in activeIDs {
+            if let latest = await store.task(id: id) {
+                await syncLiveActivity(for: latest, force: true)
+            }
+        }
     }
 
     private func allDownloadTasks() async -> [URLSessionDownloadTask] {
@@ -183,7 +203,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         let expected = totalBytesExpectedToWrite > 0
             ? (responseStatus == 206 ? (taskResponseTotal(downloadTask.response) ?? totalBytesExpectedToWrite + effectiveOffset) : totalBytesExpectedToWrite)
             : nil
-        updates.enqueue { [store] in
+        updates.enqueue { [weak self, store] in
             _ = try? await store.update(id: id) { task in
                 guard task.status == .downloading else { return }
                 if responseStatus == 200 && task.bytesWritten > 0 {
@@ -194,6 +214,9 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
                 }
                 try task.recordProgress(bytesWritten: max(task.bytesWritten, effectiveOffset + totalBytesWritten),
                                         expectedBytes: expected)
+            }
+            if let latest = await store.task(id: id) {
+                await self?.syncLiveActivity(for: latest)
             }
         }
     }
@@ -305,7 +328,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         lock.unlock()
 
         if wasDeleting || wasPausing { return }
-        updates.enqueue { [store] in
+        updates.enqueue { [weak self, store] in
             _ = try? await store.update(id: id) { value in
                 guard value.status == .downloading else { return }
                 if let error {
@@ -341,6 +364,14 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
                     try value.markFailed(message: "iOS background download completed but its temporary file could not be moved.")
                 }
             }
+            if let latest = await store.task(id: id) {
+                await self?.syncLiveActivity(for: latest, force: true)
+                if latest.status == .completed {
+                    self?.postDownloadNotification(for: latest, completed: true)
+                } else if latest.status == .failed {
+                    self?.postDownloadNotification(for: latest, completed: false)
+                }
+            }
         }
     }
 
@@ -356,6 +387,68 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
                 DispatchQueue.main.async(execute: DispatchWorkItem(block: completion))
             }
         }
+    }
+
+    #if canImport(ActivityKit)
+    @available(iOS 16.1, *)
+    private func syncLiveActivity(for task: DownloadTask, statusOverride: String? = nil,
+                                  force: Bool = false) async {
+        let now = Date()
+        if !force {
+            let shouldUpdate = lock.withLock { () -> Bool in
+                guard now.timeIntervalSince(lastLiveActivityUpdates[task.id] ?? .distantPast) >= 1.0 else {
+                    return false
+                }
+                lastLiveActivityUpdates[task.id] = now
+                return true
+            }
+            guard shouldUpdate else { return }
+        } else {
+            lock.withLock { lastLiveActivityUpdates[task.id] = now }
+        }
+
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        let fileName = task.sourceURL.lastPathComponent.isEmpty
+            ? (task.sourceURL.host ?? "Download")
+            : task.sourceURL.lastPathComponent
+        let attributes = DownloadActivityAttributes(downloadID: task.id, fileName: fileName)
+        let state = DownloadActivityAttributes.ContentState(
+            progress: task.progress ?? 0,
+            bytesWritten: task.bytesWritten,
+            expectedBytes: task.expectedBytes,
+            status: statusOverride ?? task.status.rawValue.capitalized
+        )
+
+        if let activity = Activity<DownloadActivityAttributes>.activities.first(where: {
+            $0.attributes.downloadID == task.id
+        }) {
+            if statusOverride != nil || task.status != .downloading {
+                await activity.end(using: state, dismissalPolicy: .default)
+                lock.withLock { lastLiveActivityUpdates.removeValue(forKey: task.id) }
+            } else {
+                await activity.update(using: state)
+            }
+        } else if statusOverride == nil && task.status == .downloading {
+            _ = try? Activity.request(attributes: attributes, contentState: state, pushType: nil)
+        }
+    }
+    #endif
+
+    private func postDownloadNotification(for task: DownloadTask, completed: Bool) {
+        #if canImport(UserNotifications)
+        let content = UNMutableNotificationContent()
+        content.title = completed ? "Download complete" : "Download failed"
+        content.body = task.sourceURL.lastPathComponent.isEmpty
+            ? (completed ? "Your file is ready." : (task.failureMessage ?? "The download could not be completed."))
+            : "\(task.sourceURL.lastPathComponent) — " + (completed ? "Your file is ready." : (task.failureMessage ?? "The download could not be completed."))
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: "zelto-\(completed ? "complete" : "failed")-\(task.id.uuidString)",
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request)
+        #endif
     }
 
     private static func contentRangeTotal(_ value: String) -> Int64? {
