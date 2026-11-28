@@ -98,7 +98,14 @@ public final class ParallelHTTPDownloadClient: @unchecked Sendable {
         task: DownloadTask,
         progress: (@Sendable (ParallelDownloadProgress) -> Void)? = nil
     ) async throws -> HTTPDownloadResult? {
-        let identity = try await probe(task.sourceURL)
+        let identity: ParallelResourceIdentity
+        do {
+            identity = try await probe(task.sourceURL)
+        } catch ParallelHTTPDownloadError.rangeUnsupported {
+            return nil
+        } catch ParallelHTTPDownloadError.missingValidator {
+            return nil
+        }
         guard identity.totalBytes >= minimumFileSize,
               let validator = identity.validator,
               let ranges = HTTPRangePlanner.makePlan(totalBytes: identity.totalBytes,
@@ -209,6 +216,7 @@ public final class ParallelHTTPDownloadClient: @unchecked Sendable {
         request.httpMethod = "GET"
         request.timeoutInterval = 30
         request.setValue("bytes=0-0", forHTTPHeaderField: "Range")
+        request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 206,
               data.count == 1,
@@ -302,6 +310,7 @@ private final class ParallelManifestState: @unchecked Sendable {
                 request.timeoutInterval = 120
                 request.setValue(range.headerValue, forHTTPHeaderField: "Range")
                 request.setValue(validator, forHTTPHeaderField: "If-Range")
+                request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
                 let (temporaryURL, response) = try await session.download(for: request)
                 guard let http = response as? HTTPURLResponse, http.statusCode == 206 else {
                     throw ParallelHTTPDownloadError.invalidSegmentResponse(range.index)
@@ -326,6 +335,8 @@ private final class ParallelManifestState: @unchecked Sendable {
                 try FileManager.default.moveItem(at: temporaryURL, to: part)
                 markCompleted(range)
                 return range.index
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 lastError = error
                 if attempt < 2 {
