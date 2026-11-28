@@ -23,6 +23,30 @@ final class HTTPDownloadClientTests: XCTestCase {
         ))
     }
 
+    func testNineByteErrorBodyCannotBeAcceptedAsZIP() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".zip")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data("Not Found".utf8).write(to: url)
+
+        XCTAssertEqual(
+            HTTPDownloadResponseValidator.failureMessage(
+                statusCode: 200, expectedBytes: 9, actualBytes: 9, fileURL: url
+            ),
+            "The server response is not a valid ZIP archive. The downloaded file was discarded."
+        )
+    }
+
+    func testValidEmptyZIPArchivePassesSignatureValidation() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".zip")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let emptyZIP = Data([
+            0x50, 0x4B, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+        ])
+        try emptyZIP.write(to: url)
+
+        XCTAssertTrue(HTTPDownloadResponseValidator.isValidZIPArchive(at: url))
+    }
+
     func testRangeRequestRequiresValidator() throws {
         let client = HTTPDownloadClient()
         let resumable = try DownloadTask(sourceURL: URL(string: "https://example.com/archive")!,
