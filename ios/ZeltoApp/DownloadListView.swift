@@ -1,22 +1,19 @@
 import SwiftUI
-import UIKit
 import ZeltoCore
 
 struct DownloadListView: View {
+    let appDelegate: ZeltoAppDelegate
+
     @Environment(\.scenePhase) private var scenePhase
     @State private var tasks: [DownloadTask] = []
     @State private var sourceURL = ""
     @State private var errorMessage: String?
     @State private var isAdding = false
 
-    private var appDelegate: ZeltoAppDelegate? {
-        UIApplication.shared.delegate as? ZeltoAppDelegate
-    }
-
     var body: some View {
         NavigationStack {
             Group {
-                if let startupError = appDelegate?.startupError {
+                if let startupError = appDelegate.startupError {
                     EmptyStateView(title: "Storage unavailable", systemImage: "externaldrive.badge.exclamationmark", message: startupError)
                 } else if tasks.isEmpty {
                     EmptyStateView(title: "No downloads yet", systemImage: "arrow.down.circle", message: "Paste a direct file URL below to start your first download.")
@@ -125,14 +122,13 @@ struct DownloadListView: View {
 
     @MainActor
     private func reloadTasks() async {
-        guard let store = appDelegate?.downloadStore else { return }
-        tasks = await store.allTasks()
+        tasks = await appDelegate.downloadStore?.allTasks() ?? []
     }
 
     @MainActor
     private func pauseDownload(_ id: UUID) async {
         do {
-            try await appDelegate?.backgroundDownloads?.pause(id: id)
+            try await appDelegate.backgroundDownloads?.pause(id: id)
             await reloadTasks()
         } catch {
             errorMessage = error.localizedDescription
@@ -142,7 +138,7 @@ struct DownloadListView: View {
     @MainActor
     private func deleteDownload(_ id: UUID) async {
         do {
-            try await appDelegate?.backgroundDownloads?.delete(id: id)
+            try await appDelegate.backgroundDownloads?.delete(id: id)
             await reloadTasks()
         } catch {
             errorMessage = error.localizedDescription
@@ -152,7 +148,7 @@ struct DownloadListView: View {
     @MainActor
     private func resumeDownload(_ id: UUID) async {
         do {
-            _ = try await appDelegate?.backgroundDownloads?.enqueue(id: id)
+            _ = try await appDelegate.backgroundDownloads?.enqueue(id: id)
             await reloadTasks()
         } catch {
             errorMessage = error.localizedDescription
@@ -161,9 +157,9 @@ struct DownloadListView: View {
 
     @MainActor
     private func addDownload() async {
-        guard let store = appDelegate?.downloadStore,
-              let manager = appDelegate?.backgroundDownloads else {
-            errorMessage = appDelegate?.startupError ?? "Download services are not ready."
+        guard let store = appDelegate.downloadStore,
+              let manager = appDelegate.backgroundDownloads else {
+            errorMessage = appDelegate.startupError ?? "Download services are not ready. Please restart Zelto and try again."
             return
         }
 
@@ -171,7 +167,11 @@ struct DownloadListView: View {
         defer { isAdding = false }
 
         do {
-            guard let url = URL(string: sourceURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            let rawURL = sourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let url = URL(string: rawURL),
+                  let scheme = url.scheme?.lowercased(),
+                  ["http", "https"].contains(scheme),
+                  url.host != nil else {
                 throw DownloadTaskError.invalidSourceURL
             }
             let support = try FileManager.default.url(
