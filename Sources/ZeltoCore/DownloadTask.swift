@@ -51,6 +51,7 @@ public enum DownloadTaskError: Error, Equatable {
     case invalidSourceURL, invalidDestination, invalidByteCount
     case invalidTransition(from: DownloadStatus, operation: String)
     case progressCannotMoveBackwards
+    case finalByteCountMismatch(expected: Int64, actual: Int64)
 }
 
 public extension DownloadTask {
@@ -99,11 +100,25 @@ public extension DownloadTask {
     }
 
     mutating func complete() throws {
+        try complete(actualBytes: expectedBytes ?? bytesWritten)
+    }
+
+    /// Completes only after the final on-disk byte count has been verified.
+    /// When the server did not provide a length, the actual size becomes the
+    /// task's final expected size so the UI can display 100% accurately.
+    mutating func complete(actualBytes: Int64) throws {
         guard status == .downloading else {
             throw DownloadTaskError.invalidTransition(from: status, operation: "complete")
         }
-        status = .completed; resumeData = nil; failureMessage = nil
-        if let expectedBytes, expectedBytes > 0 { bytesWritten = expectedBytes }
+        guard actualBytes >= 0 else { throw DownloadTaskError.invalidByteCount }
+        if let expectedBytes, expectedBytes > 0, actualBytes != expectedBytes {
+            throw DownloadTaskError.finalByteCountMismatch(expected: expectedBytes, actual: actualBytes)
+        }
+        bytesWritten = actualBytes
+        if expectedBytes == nil || expectedBytes == 0 { expectedBytes = actualBytes }
+        status = .completed
+        resumeData = nil
+        failureMessage = nil
         updatedAt = Date()
     }
 }
