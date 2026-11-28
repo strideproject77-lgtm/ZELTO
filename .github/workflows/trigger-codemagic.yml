@@ -1,0 +1,83 @@
+name: Trigger Zelto Codemagic Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zelto-codemagic-api-trigger
+  cancel-in-progress: false
+
+jobs:
+  trigger-codemagic:
+    name: Request Codemagic build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate required secrets
+        env:
+          CODEMAGIC_API_TOKEN: ${{ secrets.CODEMAGIC_API_TOKEN }}
+          CODEMAGIC_APP_ID: ${{ secrets.CODEMAGIC_APP_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$CODEMAGIC_API_TOKEN" || { echo "::error::Missing repository secret CODEMAGIC_API_TOKEN"; exit 1; }
+          test -n "$CODEMAGIC_APP_ID" || { echo "::error::Missing repository secret CODEMAGIC_APP_ID"; exit 1; }
+
+      - name: Trigger Zelto IPA workflow on main
+        id: trigger
+        env:
+          CODEMAGIC_API_TOKEN: ${{ secrets.CODEMAGIC_API_TOKEN }}
+          CODEMAGIC_APP_ID: ${{ secrets.CODEMAGIC_APP_ID }}
+        run: |
+          set -euo pipefail
+          payload="$(jq -n \
+            --arg workflow_id "zelto-ipa" \
+            --arg branch "main" \
+            '{workflow_id: $workflow_id, branch: $branch}')"
+
+          response_file="$(mktemp)"
+          http_code="$(curl --silent --show-error \
+            --output "$response_file" \
+            --write-out "%{http_code}" \
+            --request POST \
+            --header "Accept: application/json" \
+            --header "Content-Type: application/json" \
+            --header "x-auth-token: $CODEMAGIC_API_TOKEN" \
+            --data "$payload" \
+            "https://codemagic.io/api/v3/apps/$CODEMAGIC_APP_ID/builds")"
+
+          if [ "$http_code" != "202" ]; then
+            echo "::error::Codemagic API returned HTTP $http_code"
+            cat "$response_file"
+            exit 1
+          fi
+
+          build_id="$(jq -r '.data.id // empty' "$response_file")"
+          if [ -z "$build_id" ]; then
+            echo "::error::Codemagic accepted the request but did not return data.id"
+            cat "$response_file"
+            exit 1
+          fi
+
+          echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
+          echo "Codemagic accepted the Zelto build request."
+          echo "Build ID: $build_id"
+          echo "Build page: https://codemagic.io/app/$CODEMAGIC_APP_ID/build/$build_id"
+
+      - name: Publish build link in job summary
+        env:
+          CODEMAGIC_APP_ID: ${{ secrets.CODEMAGIC_APP_ID }}
+          BUILD_ID: ${{ steps.trigger.outputs.build_id }}
+        run: |
+          {
+            echo "## Zelto Codemagic build requested"
+            echo
+            echo "- Branch: `main`"
+            echo "- Workflow: `zelto-ipa`"
+            echo "- Build ID: `$BUILD_ID`"
+            echo "- [Open Codemagic build](https://codemagic.io/app/$CODEMAGIC_APP_ID/build/$BUILD_ID)"
+            echo
+            echo "The API trigger is complete. Codemagic may still show queued/waiting while it allocates a build machine."
+          } >> "$GITHUB_STEP_SUMMARY"
