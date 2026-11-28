@@ -144,11 +144,16 @@ public final class BackgroundParallelDownloadCoordinator: NSObject, URLSessionDo
         return firstIdentifier
     }
 
+    public func hasActiveTask(id: UUID) async -> Bool {
+        await allTasks().contains { Self.metadata(from: $0.taskDescription)?.taskID == id }
+    }
+
     public func pause(id: UUID) async {
         let tasks = await allTasks().filter { Self.metadata(from: $0.taskDescription)?.taskID == id }
         lock.withLock { pausingIDs.insert(id) }
         for task in tasks { task.cancel() }
-        let durable = await store.task(id: id).map { durableByteCount(for: $0) } ?? 0
+        let saved = await store.task(id: id)
+        let durable = saved.map { durableByteCount(for: $0) } ?? 0
         _ = try? await store.update(id: id) { value in
             if value.status == .downloading {
                 value.bytesWritten = durable
