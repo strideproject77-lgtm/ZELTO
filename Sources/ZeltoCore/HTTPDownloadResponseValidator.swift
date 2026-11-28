@@ -35,7 +35,6 @@ public enum HTTPDownloadResponseValidator {
         defer { try? handle.close() }
 
         guard let prefix = try? handle.read(upToCount: 4_096),
-              let prefix,
               prefix.range(of: Data([0x50, 0x4B, 0x03, 0x04])) != nil
                 || prefix.starts(with: Data([0x50, 0x4B, 0x05, 0x06])) else {
             return false
@@ -44,7 +43,6 @@ public enum HTTPDownloadResponseValidator {
         let tailLength = UInt64(min(size, 65_557))
         guard (try? handle.seek(toOffset: UInt64(size) - tailLength)) != nil,
               let tail = try? handle.readToEnd(),
-              let tail,
               tail.range(of: Data([0x50, 0x4B, 0x05, 0x06])) != nil else {
             return false
         }
