@@ -16,6 +16,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
     private var session: URLSession!
     private var backgroundEventsCompletion: (() -> Void)?
     private var fileMoveResults: [UUID: Bool] = [:]
+    private var fileResponseResults: [UUID: (statusCode: Int, expectedBytes: Int64?)] = [:]
     private var pausingTaskIDs: Set<UUID> = []
     private var deletingTaskIDs: Set<UUID> = []
     private let updates = BackgroundStoreUpdateQueue()
@@ -155,12 +156,43 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         // delegate callback returns. The destination is embedded in taskDescription
         // so this operation does not need an asynchronous store lookup.
         guard let metadata = Self.parseTaskDescription(downloadTask.taskDescription) else { return }
+        guard let response = downloadTask.response as? HTTPURLResponse else {
+            lock.withLock {
+                fileMoveResults[metadata.id] = false
+                fileResponseResults[metadata.id] = (statusCode: 0, expectedBytes: nil)
+            }
+            try? FileManager.default.removeItem(at: location)
+            return
+        }
+
+        let statusCode = response.statusCode
+        let responseExpectedBytes: Int64?
+        if statusCode == 206,
+           let contentRange = response.value(forHTTPHeaderField: "Content-Range"),
+           let total = Self.contentRangeTotal(contentRange) {
+            responseExpectedBytes = total
+        } else {
+            responseExpectedBytes = response.expectedContentLength > 0 ? response.expectedContentLength : nil
+        }
+
         lock.lock()
         guard !deletingTaskIDs.contains(metadata.id) else {
             lock.unlock()
             try? FileManager.default.removeItem(at: location)
             return
         }
+        fileResponseResults[metadata.id] = (statusCode: statusCode, expectedBytes: responseExpectedBytes)
+
+        // URLSessionDownloadTask can finish without a transport error even when
+        // the server returned an HTTP error page (for example, a 9-byte 404).
+        // Never move an error response into the user's Downloads folder.
+        guard statusCode == 200 || statusCode == 206 else {
+            fileMoveResults[metadata.id] = false
+            lock.unlock()
+            try? FileManager.default.removeItem(at: location)
+            return
+        }
+
         let destination = URL(fileURLWithPath: metadata.destinationPath)
         let moved: Bool
         do {
@@ -186,6 +218,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         let wasPausing = pausingTaskIDs.contains(id)
         let wasDeleting = deletingTaskIDs.remove(id) != nil
         let fileMoved = fileMoveResults.removeValue(forKey: id) ?? false
+        let responseResult = fileResponseResults.removeValue(forKey: id)
         lock.unlock()
 
         if wasDeleting || wasPausing { return }
@@ -195,17 +228,31 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
                 if let error {
                     let resumeData = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data
                     try value.pause(resumeData: resumeData)
+                } else if let responseResult,
+                          responseResult.statusCode != 200 && responseResult.statusCode != 206 {
+                    try value.markFailed(message: responseResult.statusCode == 0
+                        ? "The server returned an invalid HTTP response."
+                        : "The server returned HTTP \(responseResult.statusCode), not a downloadable file.")
+                    try? FileManager.default.removeItem(atPath: metadata.destinationPath)
                 } else if fileMoved {
                     let attributes = try FileManager.default.attributesOfItem(atPath: metadata.destinationPath)
                     guard let size = (attributes[.size] as? NSNumber)?.int64Value, size >= 0 else {
                         try value.markFailed(message: "Downloaded file size could not be verified.")
+                        try? FileManager.default.removeItem(atPath: metadata.destinationPath)
                         return
                     }
-                    do {
-                        try value.complete(actualBytes: size)
-                    } catch {
-                        try value.markFailed(message: "Downloaded file size did not match the server's expected size.")
+                    let expected = value.expectedBytes.flatMap { $0 > 0 ? $0 : nil }
+                        ?? responseResult?.expectedBytes
+                    if let message = HTTPDownloadResponseValidator.failureMessage(
+                        statusCode: responseResult?.statusCode ?? 200,
+                        expectedBytes: expected,
+                        actualBytes: size
+                    ) {
+                        try value.markFailed(message: message)
+                        try? FileManager.default.removeItem(atPath: metadata.destinationPath)
+                        return
                     }
+                    try value.complete(actualBytes: size)
                 } else {
                     try value.markFailed(message: "iOS background download completed but its temporary file could not be moved.")
                 }
@@ -225,6 +272,12 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
                 DispatchQueue.main.async(execute: DispatchWorkItem(block: completion))
             }
         }
+    }
+
+    private static func contentRangeTotal(_ value: String) -> Int64? {
+        let pieces = value.split(separator: "/", maxSplits: 1)
+        guard pieces.count == 2, pieces[1] != "*" else { return nil }
+        return Int64(pieces[1])
     }
 
     private static func makeTaskDescription(id: UUID, destinationPath: String) -> String {
