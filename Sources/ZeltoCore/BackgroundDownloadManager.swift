@@ -389,10 +389,19 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         }
     }
 
-    #if canImport(ActivityKit)
-    @available(iOS 16.1, *)
     private func syncLiveActivity(for task: DownloadTask, statusOverride: String? = nil,
                                   force: Bool = false) async {
+        #if canImport(ActivityKit)
+        if #available(iOS 16.1, *) {
+            await syncLiveActivityAvailable(for: task, statusOverride: statusOverride, force: force)
+        }
+        #endif
+    }
+
+    #if canImport(ActivityKit)
+    @available(iOS 16.1, *)
+    private func syncLiveActivityAvailable(for task: DownloadTask, statusOverride: String? = nil,
+                                           force: Bool = false) async {
         let now = Date()
         if !force {
             let shouldUpdate = lock.withLock { () -> Bool in
