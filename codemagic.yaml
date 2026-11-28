@@ -14,6 +14,8 @@ workflows:
       changeset:
         includes:
           - codemagic.yaml
+          - Package.swift
+          - "Sources/**"
           - .github/workflows/ipa-builder.yml
           - scripts/**
           - "ios/**/*.xcodeproj/**"
