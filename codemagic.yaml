@@ -46,6 +46,6 @@ workflows:
           set -euo pipefail
           bash scripts/run_codemagic_build.sh
     artifacts:
-      - Zelto.ipa
+      - Zelto-IPA-Artifact.zip
       - /tmp/zelto-codemagic-logs/*.log
       - /tmp/zelto-codemagic-logs/metadata.json
