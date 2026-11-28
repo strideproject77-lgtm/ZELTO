@@ -46,7 +46,7 @@ public actor DownloadEngine {
                                         expectedBytes: result.expectedBytes,
                                         etag: result.etag,
                                         lastModified: result.lastModified)
-                try task.complete()
+                try task.complete(actualBytes: result.bytesWritten)
             }
             return result
         } catch {
