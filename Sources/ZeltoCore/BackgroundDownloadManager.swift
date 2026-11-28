@@ -17,6 +17,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
     private var backgroundEventsCompletion: (() -> Void)?
     private var fileMoveResults: [UUID: Bool] = [:]
     private var pausingTaskIDs: Set<UUID> = []
+    private var deletingTaskIDs: Set<UUID> = []
     private let updates = BackgroundStoreUpdateQueue()
 
     public init(store: DownloadStore, identifier: String = BackgroundDownloadManager.defaultIdentifier) {
@@ -50,6 +51,21 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         downloadTask.taskDescription = Self.makeTaskDescription(id: id, destinationPath: active.destinationPath)
         downloadTask.resume()
         return downloadTask.taskIdentifier
+    }
+
+    /// Cancels an active transfer, removes its saved metadata, and deletes
+    /// the destination file. Late URLSession callbacks are ignored for this ID.
+    public func delete(id: UUID) async throws {
+        guard let saved = await store.task(id: id) else { throw DownloadStoreError.taskNotFound }
+        let tasks = await allDownloadTasks()
+        if let active = tasks.first(where: { Self.parseTaskDescription($0.taskDescription)?.id == id }) {
+            lock.withLock { deletingTaskIDs.insert(id) }
+            active.cancel()
+        }
+        try await store.remove(id: id)
+        if FileManager.default.fileExists(atPath: saved.destinationPath) {
+            try FileManager.default.removeItem(atPath: saved.destinationPath)
+        }
     }
 
     /// Requests a cooperative pause. iOS may provide opaque resume data; if it
@@ -122,6 +138,7 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
                            didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
                            totalBytesExpectedToWrite: Int64) {
         guard let id = Self.parseTaskDescription(downloadTask.taskDescription)?.id else { return }
+        if lock.withLock({ deletingTaskIDs.contains(id) }) { return }
         let expected = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : nil
         updates.enqueue { [store] in
             _ = try? await store.update(id: id) { task in
@@ -138,6 +155,12 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         // delegate callback returns. The destination is embedded in taskDescription
         // so this operation does not need an asynchronous store lookup.
         guard let metadata = Self.parseTaskDescription(downloadTask.taskDescription) else { return }
+        lock.lock()
+        guard !deletingTaskIDs.contains(metadata.id) else {
+            lock.unlock()
+            try? FileManager.default.removeItem(at: location)
+            return
+        }
         let destination = URL(fileURLWithPath: metadata.destinationPath)
         let moved: Bool
         do {
@@ -151,7 +174,6 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         } catch {
             moved = false
         }
-        lock.lock()
         fileMoveResults[metadata.id] = moved
         lock.unlock()
     }
@@ -161,10 +183,11 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
         guard let id = Self.parseTaskDescription(task.taskDescription)?.id else { return }
         lock.lock()
         let wasPausing = pausingTaskIDs.contains(id)
+        let wasDeleting = deletingTaskIDs.remove(id) != nil
         let fileMoved = fileMoveResults.removeValue(forKey: id) ?? false
         lock.unlock()
 
-        if wasPausing { return }
+        if wasDeleting || wasPausing { return }
         updates.enqueue { [store] in
             _ = try? await store.update(id: id) { value in
                 guard value.status == .downloading else { return }
