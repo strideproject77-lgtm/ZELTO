@@ -78,7 +78,7 @@ public actor DownloadStore {
     }
 
     @discardableResult
-    public func update(id: UUID, _ change: (inout DownloadTask) throws -> Void) throws -> DownloadTask {
+    public func update(id: UUID, _ change: @Sendable (inout DownloadTask) throws -> Void) throws -> DownloadTask {
         guard var current = tasks[id] else { throw DownloadStoreError.taskNotFound }
         try change(&current)
         tasks[id] = current

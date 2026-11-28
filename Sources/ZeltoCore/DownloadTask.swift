@@ -1,7 +1,4 @@
 import Foundation
-#if canImport(FoundationNetworking)
-import FoundationNetworking
-#endif
 
 public enum DownloadStatus: String, Codable, Sendable {
     case queued, downloading, paused, failed, completed
