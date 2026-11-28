@@ -172,7 +172,12 @@ public final class BackgroundDownloadManager: NSObject, URLSessionDownloadDelega
                     let resumeData = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data
                     try value.pause(resumeData: resumeData)
                 } else if fileMoved {
-                    try value.complete()
+                    let attributes = try FileManager.default.attributesOfItem(atPath: metadata.destinationPath)
+                    guard let size = (attributes[.size] as? NSNumber)?.int64Value, size >= 0 else {
+                        try value.markFailed(message: "Downloaded file size could not be verified.")
+                        return
+                    }
+                    try value.complete(actualBytes: size)
                 } else {
                     try value.markFailed(message: "iOS background download completed but its temporary file could not be moved.")
                 }
