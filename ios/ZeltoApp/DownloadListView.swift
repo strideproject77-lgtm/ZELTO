@@ -162,10 +162,14 @@ struct DownloadListView: View {
             let folder = support.appendingPathComponent("Downloads", isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 
-            let suggestedName = url.lastPathComponent.isEmpty ? UUID().uuidString : url.lastPathComponent
-            let safeName = suggestedName.replacingOccurrences(of: "/", with: "_")
-            let destination = folder.appendingPathComponent(safeName)
-            let task = try DownloadTask(sourceURL: url, destinationPath: destination.path)
+            let taskID = UUID()
+            let suggestedName = url.lastPathComponent.isEmpty ? "download" : url.lastPathComponent
+            let destination = DownloadDestination.fileURL(
+                in: folder,
+                suggestedName: suggestedName,
+                taskID: taskID
+            )
+            let task = try DownloadTask(id: taskID, sourceURL: url, destinationPath: destination.path)
             try await store.insert(task)
             _ = try await manager.enqueue(id: task.id)
             sourceURL = ""
